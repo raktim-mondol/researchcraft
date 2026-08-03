@@ -110,8 +110,8 @@ export async function testMcpServer(
 }
 
 export type OAuthStartResult =
-  | { ok: true; alreadyConnected: true; tools: string[] }
-  | { ok: true; alreadyConnected: false; authorizationUrl: string }
+  | { ok: true; alreadyConnected: true; tools: string[]; connected: true }
+  | { ok: true; alreadyConnected: false; authorizationUrl: string; connected: false }
   | { ok: false; detail?: string };
 
 export async function startMcpOAuth(name: string): Promise<OAuthStartResult> {

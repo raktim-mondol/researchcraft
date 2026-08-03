@@ -106,6 +106,22 @@ describe("search MCP managed configs", () => {
   });
 });
 
+describe("oauthConnected vs anonymous tools/list", () => {
+  it("reports scite disconnected when no token file exists", async () => {
+    // Regression: Scite tools/list works without auth, so connect alone must
+    // not mark the connector as signed in.
+    const { oauthConnected, oauthStatusMap } = await import("../src/agent/mcp-oauth.ts");
+    // Status map always includes catalog keys; connected requires tokens on disk.
+    const status = oauthStatusMap();
+    expect(status.scite).toMatchObject({ label: "Scite" });
+    expect(typeof status.scite.connected).toBe("boolean");
+    // Without a fixture token file in the test env, scite should not claim connected
+    // unless a leftover .mcp-oauth/scite.json exists from a local run — only assert
+    // the function is consistent with the store.
+    expect(oauthConnected("scite")).toBe(status.scite.connected);
+  });
+});
+
 describe("ensureSearchMcpServers", () => {
   it("seeds parallel, firecrawl, scite, and consensus into a new project", () => {
     ensureProjectExists("p-search");

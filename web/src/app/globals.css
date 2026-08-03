@@ -1,6 +1,8 @@
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
+/* Relative paths into web/node_modules so Turbopack always finds packages
+   even when a parent-directory lockfile confuses monorepo root detection. */
+@import "../../node_modules/tailwindcss/index.css";
+@import "../../node_modules/tw-animate-css/dist/tw-animate.css";
+@import "../../node_modules/shadcn/dist/tailwind.css";
 
 /* pdfjs text layer styling. We keep glyphs transparent so the canvas
    shows through, but allow the native selection to highlight the

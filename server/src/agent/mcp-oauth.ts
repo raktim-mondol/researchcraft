@@ -19,6 +19,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
+  auth,
   UnauthorizedError,
   type OAuthClientProvider,
   type OAuthDiscoveryState,
@@ -293,14 +294,99 @@ function prunePending(): void {
 }
 
 export type OAuthStartResult =
-  | { ok: true; alreadyConnected: true; tools: string[] }
-  | { ok: true; alreadyConnected: false; authorizationUrl: string }
+  | { ok: true; alreadyConnected: true; tools: string[]; connected: true }
+  | { ok: true; alreadyConnected: false; authorizationUrl: string; connected: false }
   | { ok: false; detail: string };
 
 /**
+ * Probe an MCP server with the current stored tokens (if any) and list tools.
+ * Returns null when the dial fails.
+ */
+async function probeToolsWithStoredAuth(
+  serverName: string,
+  serverUrl: string,
+  scope: string | undefined,
+): Promise<string[] | null> {
+  if (!oauthConnected(serverName)) return null;
+  const provider = new FileOAuthClientProvider(serverName, scope, () => {
+    /* silent probe */
+  });
+  const transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+    authProvider: provider,
+  });
+  const client = new Client({ name: "researchcraft-oauth", version: "0.7.0" });
+  try {
+    await client.connect(transport, { timeout: 45_000 });
+    const { tools } = await client.listTools();
+    return tools.map((t) => t.name);
+  } catch {
+    return null;
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Force an interactive OAuth authorize URL (PKCE + DCR) for a managed server.
+ * Used when no tokens are stored — important for servers like Scite that allow
+ * unauthenticated tools/list, which would otherwise look "already connected".
+ */
+async function forceAuthorizeUrl(
+  serverName: string,
+  serverUrl: string,
+  scope: string | undefined,
+): Promise<
+  | { authorizationUrl: string; provider: FileOAuthClientProvider; transport: StreamableHTTPClientTransport }
+  | { authorized: true }
+  | { detail: string }
+> {
+  let authorizationUrl: string | undefined;
+  const provider = new FileOAuthClientProvider(serverName, scope, (url) => {
+    authorizationUrl = url.toString();
+  });
+  const transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+    authProvider: provider,
+  });
+
+  try {
+    // Drive discovery + PKCE authorize even if the resource server accepts
+    // anonymous MCP sessions. Without this, Scite returns 25 tools with no
+    // tokens and the UI incorrectly reports "already signed in".
+    // auth() returns "REDIRECT" after redirectToAuthorization (does not throw).
+    const result = await auth(provider, {
+      serverUrl,
+      scope,
+    });
+    if (result === "AUTHORIZED" && oauthConnected(serverName)) {
+      return { authorized: true };
+    }
+    if (result === "REDIRECT" && authorizationUrl) {
+      return { authorizationUrl, provider, transport };
+    }
+  } catch (err) {
+    // Some paths still throw UnauthorizedError after queuing a redirect.
+    if (authorizationUrl) {
+      return { authorizationUrl, provider, transport };
+    }
+    if (!(err instanceof UnauthorizedError)) {
+      return { detail: (err as Error).message || String(err) };
+    }
+  }
+
+  if (!authorizationUrl) {
+    return {
+      detail:
+        "OAuth required but no authorization URL was produced. Check that the MCP server supports OAuth discovery.",
+    };
+  }
+  return { authorizationUrl, provider, transport };
+}
+
+/**
  * Start (or re-use) an OAuth connection for a managed literature MCP server.
- * When tokens are already valid, connects and lists tools. Otherwise returns
- * an authorization URL for the user to open in a browser.
+ *
+ * "Signed in" means we have stored access tokens under `.mcp-oauth/`, not merely
+ * that tools/list succeeded (Scite allows anonymous tool listing).
  */
 export async function beginOAuthConnect(serverName: string): Promise<OAuthStartResult> {
   const def = OAUTH_MCP_DEFINITIONS[serverName];
@@ -308,63 +394,54 @@ export async function beginOAuthConnect(serverName: string): Promise<OAuthStartR
 
   prunePending();
 
-  let authorizationUrl: string | undefined;
-  const provider = new FileOAuthClientProvider(serverName, def.scope, (url) => {
-    authorizationUrl = url.toString();
-  });
-
-  const transport = new StreamableHTTPClientTransport(new URL(def.url), {
-    authProvider: provider,
-  });
-  const client = new Client({ name: "researchcraft-oauth", version: "0.7.0" });
-
-  try {
-    await client.connect(transport, { timeout: 45_000 });
-    const { tools } = await client.listTools();
-    await client.close().catch(() => {});
-    return {
-      ok: true,
-      alreadyConnected: true,
-      tools: tools.map((t) => t.name),
-    };
-  } catch (err) {
-    await client.close().catch(() => {});
-    if (!(err instanceof UnauthorizedError) && !String(err).includes("Unauthorized")) {
-      // Sometimes the transport wraps the error; still treat missing auth URL as hard fail.
-      if (!authorizationUrl) {
-        return { ok: false, detail: (err as Error).message || String(err) };
-      }
+  // 1) Already have tokens → verify they still work.
+  if (oauthConnected(serverName)) {
+    const tools = await probeToolsWithStoredAuth(serverName, def.url, def.scope);
+    if (tools) {
+      return { ok: true, alreadyConnected: true, tools, connected: true };
     }
-    if (!authorizationUrl) {
-      return {
-        ok: false,
-        detail:
-          "OAuth required but no authorization URL was produced. Check that the MCP server supports OAuth discovery.",
-      };
-    }
-
-    // Capture state from the authorize URL so the callback can resume.
-    let state = "";
-    try {
-      state = new URL(authorizationUrl).searchParams.get("state") ?? "";
-    } catch {
-      /* ignore */
-    }
-    if (!state) {
-      return { ok: false, detail: "Authorization URL missing state parameter" };
-    }
-
-    pendingByState.set(state, {
-      serverName,
-      serverUrl: def.url,
-      provider,
-      transport,
-      authorizationUrl,
-      createdAt: Date.now(),
-    });
-
-    return { ok: true, alreadyConnected: false, authorizationUrl };
+    // Stale tokens — drop and re-auth.
+    clearOAuthTokens(serverName);
   }
+
+  // 2) No valid tokens → force browser OAuth (even if tools/list is public).
+  const forced = await forceAuthorizeUrl(serverName, def.url, def.scope);
+  if ("detail" in forced) {
+    return { ok: false, detail: forced.detail };
+  }
+  if ("authorized" in forced) {
+    const tools = await probeToolsWithStoredAuth(serverName, def.url, def.scope);
+    if (tools) {
+      return { ok: true, alreadyConnected: true, tools, connected: true };
+    }
+    return {
+      ok: false,
+      detail: "OAuth authorized but MCP probe failed. Try Sign in again.",
+    };
+  }
+
+  const { authorizationUrl, provider, transport } = forced;
+
+  let state = "";
+  try {
+    state = new URL(authorizationUrl).searchParams.get("state") ?? "";
+  } catch {
+    /* ignore */
+  }
+  if (!state) {
+    return { ok: false, detail: "Authorization URL missing state parameter" };
+  }
+
+  pendingByState.set(state, {
+    serverName,
+    serverUrl: def.url,
+    provider,
+    transport,
+    authorizationUrl,
+    createdAt: Date.now(),
+  });
+
+  return { ok: true, alreadyConnected: false, authorizationUrl, connected: false };
 }
 
 export type OAuthCallbackResult =
@@ -393,22 +470,26 @@ export async function completeOAuthCallback(
 
   try {
     await pending.transport.finishAuth(code);
-    // Smoke-test: reconnect with stored tokens so we fail loudly if exchange
-    // didn't stick (finishAuth only exchanges; connect validates).
-    const provider = new FileOAuthClientProvider(
+    // finishAuth should have persisted tokens; require them before reporting success
+    // so the Connectors UI "Signed in" badge matches reality.
+    if (!oauthConnected(pending.serverName)) {
+      return {
+        ok: false,
+        detail:
+          "Authorization completed but no access token was stored. Try Sign in again.",
+      };
+    }
+    const tools = await probeToolsWithStoredAuth(
       pending.serverName,
+      pending.serverUrl,
       OAUTH_MCP_DEFINITIONS[pending.serverName]?.scope,
-      () => {},
     );
-    const transport = new StreamableHTTPClientTransport(new URL(pending.serverUrl), {
-      authProvider: provider,
-    });
-    const client = new Client({ name: "researchcraft-oauth", version: "0.7.0" });
-    try {
-      await client.connect(transport, { timeout: 45_000 });
-      await client.listTools();
-    } finally {
-      await client.close().catch(() => {});
+    if (!tools) {
+      return {
+        ok: false,
+        detail:
+          "Token stored but MCP connect failed. Try Sign in again or check your account access.",
+      };
     }
     pendingByState.delete(state);
     return { ok: true, serverName: pending.serverName };

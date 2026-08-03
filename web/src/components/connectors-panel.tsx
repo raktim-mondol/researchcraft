@@ -246,30 +246,42 @@ export function ConnectorsPanel() {
       setOauthBusy(name);
       setOauthMsg(null);
       setError(null);
+      const label = oauthCatalog[name]?.label ?? name;
       try {
         const result = await startMcpOAuth(name);
         if (!result.ok) {
           setError(result.detail || "OAuth failed to start");
           return;
         }
-        if (result.alreadyConnected) {
+        // "Signed in" only when the backend has stored OAuth tokens — not just
+        // because tools/list succeeded (Scite allows anonymous listing).
+        if (result.alreadyConnected && result.connected) {
+          setOauth((prev) => ({
+            ...prev,
+            [name]: { connected: true, label },
+          }));
           setOauthMsg(
-            `${oauthCatalog[name]?.label ?? name} is already signed in (${result.tools.length} tools). Open a new chat tab to use them.`,
+            `${label} is signed in (${result.tools.length} tools). Open a new chat tab to use them.`,
           );
           await reload();
+          return;
+        }
+        if (!("authorizationUrl" in result) || !result.authorizationUrl) {
+          setError("OAuth did not return a sign-in URL. Try again.");
           return;
         }
         // Open the provider authorize page; callback hits the backend and
         // writes tokens. Poll status so the UI flips to Connected.
         window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
         setOauthMsg(
-          `Complete sign-in in the browser window, then return here. Status updates automatically.`,
+          `Complete sign-in for ${label} in the browser window, then return here. Status updates automatically.`,
         );
         const started = Date.now();
         while (Date.now() - started < 3 * 60 * 1000) {
           await new Promise((r) => setTimeout(r, 2000));
           const listing = await getMcpListing();
           setOauth(listing.oauth);
+          setOauthCatalog(listing.oauthCatalog);
           if (listing.oauth[name]?.connected) {
             setOauthMsg(
               `Connected to ${listing.oauth[name].label}. Open a new chat tab to use literature search.`,
@@ -277,6 +289,8 @@ export function ConnectorsPanel() {
             break;
           }
         }
+        // Final refresh so the badge stays correct if the poll timed out.
+        await reload();
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : "OAuth failed");
       } finally {

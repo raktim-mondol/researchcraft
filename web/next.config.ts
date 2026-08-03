@@ -22,6 +22,10 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: readAppVersion(),
   },
+  // Do NOT set turbopack.root to the monorepo parent: CSS `@import "tailwindcss"`
+  // then resolves from that directory (no node_modules) instead of web/, and
+  // the build fails. The multi-lockfile warning (parent ~/pnpm-lock.yaml) is
+  // noisy but harmless; leaving root unset keeps package resolution in web/.
 };
 
 export default nextConfig;
