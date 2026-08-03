@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="40" viewBox="0 0 280 40" role="img" aria-label="ResearchCraft">
+  <!-- Jade mark (matches ResearchCraft / EduVerse brand) -->
+  <rect x="0" y="8" width="24" height="24" rx="5" fill="#29d4a0"/>
+  <!-- Wordmark -->
+  <text
+    x="34"
+    y="27"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="22"
+    font-weight="400"
+    letter-spacing="-0.4"
+    fill="currentColor"
+  >ResearchCraft</text>
+</svg>

@@ -1,0 +1,583 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { apiFetch, onProjectChange } from "@/lib/projects";
+
+import type { PromptImage } from "./image-attachments";
+import { parseNotebookFrame, mergeNotebookEntries, type NotebookEntry } from "./notebook";
+
+// Keep the full tool-call trace per message: scientists rely on it to see and
+// reproduce what the agent ran, and the session export reads it too.
+const MAX_ACTIVITY_ITEMS = 200;
+
+export interface ActivityItem {
+  id: string;
+  label: string;
+  detail?: string;
+  status: "running" | "complete" | "error";
+  timestamp: number;
+  /** Raw tool name (e.g. "bash", "write") for icon + summary rendering. */
+  toolName?: string;
+  /** Frontmatter skill name when this read is a skill activation (server-resolved). */
+  skillName?: string;
+  /** Tool arguments captured from tool_start (e.g. the bash command). */
+  args?: unknown;
+  /** Tool result text captured from tool_end (truncated server-side). */
+  result?: string;
+}
+
+// Retained for backwards-compatible imports; citation verification is deferred
+// in the Pi migration and these are no longer populated.
+export type CitationKind = "doi" | "arxiv" | "pubmed" | "url";
+export type CitationStatus = "verified" | "unresolved" | "skipped";
+export interface CitationEntry {
+  raw: string;
+  kind: CitationKind;
+  identifier: string;
+  status: CitationStatus;
+  title?: string | null;
+  url?: string | null;
+  resolvedAt?: number | null;
+  error?: string | null;
+}
+export interface CitationReport {
+  total: number;
+  verified: number;
+  unresolved: number;
+  entries: CitationEntry[];
+  loading?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  /** Inline image attachments — user messages only. */
+  images?: PromptImage[];
+  activities?: ActivityItem[];
+  reasoning?: string;
+  modelVersion?: string;
+  timestamp: number;
+  /** Per-turn cost (USD) for this assistant message, from the terminal `cost` frame. */
+  runCostUsd?: number;
+  /** Per-turn token total for this assistant message. */
+  runTokens?: number;
+  /** Retained for compatibility; no longer populated under the Pi backend. */
+  turnId?: string;
+  citations?: CitationReport;
+}
+
+type Status = "ready" | "submitted" | "streaming" | "error";
+
+/** A frame from the backend SSE stream (see server/src/agent/events.ts). */
+export interface AgentFrame {
+  type: string;
+  delta?: string;
+  toolName?: string;
+  /** Frontmatter skill name attached to tool_start when the read is a skill activation. */
+  skill?: string;
+  toolCallId?: string;
+  isError?: boolean;
+  message?: string;
+  args?: unknown;
+  result?: string;
+  runCost?: number;
+  runTokens?: number;
+  role?: string;
+  content?: string;
+  steering?: unknown;
+  [k: string]: unknown;
+}
+
+const humanizeToolName = (name: string) => name.replace(/_/g, " ");
+
+/** Apply one SSE frame to the in-progress assistant message. */
+export function applyFrameToMessage(
+  message: ChatMessage,
+  frame: AgentFrame,
+  now = Date.now(),
+): ChatMessage {
+  switch (frame.type) {
+    case "text_delta":
+      return { ...message, content: message.content + (frame.delta ?? "") };
+    case "thinking_delta":
+      return { ...message, reasoning: (message.reasoning ?? "") + (frame.delta ?? "") };
+    case "tool_start": {
+      const id = String(frame.toolCallId ?? frame.toolName ?? now);
+      const label =
+        frame.toolName === "subagent"
+          ? "Running a subagent"
+          : `Running ${humanizeToolName(String(frame.toolName ?? "tool"))}`;
+      const activities = message.activities ?? [];
+      if (activities.some((a) => a.id === id && a.status === "running")) return message;
+      // A tool call interrupts the assistant's prose. Close off the current
+      // paragraph so text that resumes after the tool doesn't get glued onto
+      // the previous sentence (which broke headings/markdown — e.g.
+      // "…by condition:## Results").
+      const content =
+        message.content && !message.content.endsWith("\n")
+          ? message.content + "\n\n"
+          : message.content;
+      return {
+        ...message,
+        content,
+        activities: [
+          ...activities,
+          {
+            id,
+            label,
+            status: "running" as const,
+            timestamp: now,
+            toolName: frame.toolName ? String(frame.toolName) : undefined,
+            skillName: typeof frame.skill === "string" ? frame.skill : undefined,
+            args: frame.args,
+          },
+        ].slice(-MAX_ACTIVITY_ITEMS),
+      };
+    }
+    case "tool_end": {
+      const id = String(frame.toolCallId ?? frame.toolName ?? now);
+      const activities = message.activities ?? [];
+      const idx = activities.findIndex((a) => a.id === id);
+      const status: ActivityItem["status"] = frame.isError ? "error" : "complete";
+      if (idx === -1) return message;
+      const next = [...activities];
+      next[idx] = {
+        ...next[idx],
+        status,
+        result: typeof frame.result === "string" ? frame.result : next[idx].result,
+      };
+      return { ...message, activities: next };
+    }
+    case "cost":
+      return {
+        ...message,
+        runCostUsd:
+          typeof frame.runCost === "number" ? frame.runCost : message.runCostUsd,
+        runTokens:
+          typeof frame.runTokens === "number" ? frame.runTokens : message.runTokens,
+      };
+    case "error": {
+      // Append rather than replace: an error after partial output (mid-stream
+      // provider failure) must not be silently dropped.
+      const errorText = `Error: ${frame.message ?? "request failed"}`;
+      return {
+        ...message,
+        content: message.content ? `${message.content}\n\n${errorText}` : errorText,
+      };
+    }
+    default:
+      return message;
+  }
+}
+
+export interface TranscriptRunState {
+  /** Id of the assistant bubble frames currently apply to. */
+  assistantId: string;
+  /** True once the run's own prompt echoed back as a user message_start. */
+  sawPromptEcho: boolean;
+}
+
+export interface TranscriptResult {
+  messages: ChatMessage[];
+  state: TranscriptRunState;
+  /** Pending steering texts when the frame updated them; null otherwise. */
+  steering: string[] | null;
+}
+
+/**
+ * Apply one SSE frame to a run's transcript. Pure; returns the input
+ * `messages` reference when nothing changed so callers can skip re-renders.
+ * A user message_start after the initial prompt echo is a delivered steering
+ * message: it closes the current assistant bubble and opens a new one.
+ */
+export function applyFrameToTranscript(
+  messages: ChatMessage[],
+  state: TranscriptRunState,
+  frame: AgentFrame,
+  nextId: () => string,
+  now = Date.now(),
+): TranscriptResult {
+  if (frame.type === "queue_update") {
+    const steering = Array.isArray(frame.steering) ? frame.steering.map(String) : [];
+    return { messages, state, steering };
+  }
+  if (frame.type === "message_start" && frame.role === "user") {
+    if (!state.sawPromptEcho) {
+      return { messages, state: { ...state, sawPromptEcho: true }, steering: null };
+    }
+    const content = typeof frame.content === "string" ? frame.content : "";
+    if (!content.trim()) return { messages, state, steering: null };
+    const userId = nextId();
+    const assistantId = nextId();
+    return {
+      messages: [
+        ...messages,
+        { id: userId, role: "user", content, timestamp: now },
+        { id: assistantId, role: "assistant", content: "", timestamp: now },
+      ],
+      state: { ...state, assistantId },
+      steering: null,
+    };
+  }
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.id !== state.assistantId) return m;
+    const applied = applyFrameToMessage(m, frame, now);
+    if (applied !== m) changed = true;
+    return applied;
+  });
+  return { messages: changed ? next : messages, state, steering: null };
+}
+
+/** One transcript entry from GET /sessions/:id/history. */
+interface HistoryItem {
+  role: "user" | "assistant";
+  content?: string;
+  images?: PromptImage[];
+  frames?: AgentFrame[];
+  timestamp?: number;
+}
+
+/**
+ * JSON body for POST /sessions/:id/run. Pure so tests can pin the wire shape.
+ * `thinkingLevel: "off"` is deliberately sent (not stripped): Pi sessions
+ * remember the level across runs, so an explicit off resets a raised one.
+ * Callers omit the field entirely for models without adjustable thinking.
+ */
+export function buildRunBody(opts: {
+  message: string;
+  model?: string;
+  fusionConfig?: Record<string, unknown>;
+  computeTarget?: string;
+  thinkingLevel?: string;
+  images?: PromptImage[];
+}): Record<string, unknown> {
+  const { message, model, fusionConfig, computeTarget, thinkingLevel, images } = opts;
+  return {
+    message,
+    ...(model ? { model } : {}),
+    ...(fusionConfig ? { fusionConfig } : {}),
+    ...(computeTarget && computeTarget !== "local" ? { computeTarget } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(images && images.length > 0 ? { images } : {}),
+  };
+}
+
+export function useAgent() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [notebookEntries, setNotebookEntries] = useState<NotebookEntry[]>([]);
+  const [subagentCompletions, setSubagentCompletions] = useState(0);
+  const [status, setStatus] = useState<Status>("ready");
+  const [pendingSteers, setPendingSteers] = useState<string[]>([]);
+  const sessionIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  // send() claims the tab synchronously BEFORE its first await: a loadSession
+  // resolving mid-run must not replace the transcript, because the run's
+  // plain-value setMessages(transcript) writes would clobber it.
+  const sendClaimRef = useRef(false);
+  const messageCounter = useRef(0);
+
+  const nextId = () => String(++messageCounter.current);
+
+  /**
+   * Hydrate this (untouched) tab from a stored session's transcript, and bind
+   * the tab to that session so follow-up sends continue the conversation.
+   * The server replays the JSONL log as the same frames the live stream
+   * emits, so the restored transcript renders identically.
+   */
+  const loadSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    // Never swap the session out from under a tab that already has one, or
+    // one where a send has already claimed the transcript.
+    if (sessionIdRef.current || sendClaimRef.current) return false;
+    try {
+      const res = await apiFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/history`,
+      );
+      if (!res.ok) return false;
+      const data = (await res.json()) as { messages?: HistoryItem[] };
+      // Re-check after the awaits: a message sent while the history fetch was
+      // in flight claims the tab (and will bind a fresh session), which must
+      // win over hydration.
+      if (sessionIdRef.current || sendClaimRef.current) return false;
+      const restored: ChatMessage[] = [];
+      const fallbackTs = Date.now();
+      for (const item of data.messages ?? []) {
+        const timestamp = item.timestamp ?? fallbackTs;
+        if (item.role === "user") {
+          restored.push({
+            id: nextId(),
+            role: "user",
+            content: item.content ?? "",
+            ...(item.images && item.images.length > 0 ? { images: item.images } : {}),
+            timestamp,
+          });
+          continue;
+        }
+        let msg: ChatMessage = {
+          id: nextId(),
+          role: "assistant",
+          content: "",
+          timestamp,
+        };
+        for (const frame of item.frames ?? []) {
+          msg = applyFrameToMessage(msg, frame, timestamp);
+        }
+        // A stored log has no live spinner left to resolve.
+        msg = {
+          ...msg,
+          activities: (msg.activities ?? []).map((a) =>
+            a.status === "running" ? { ...a, status: "complete" as const } : a,
+          ),
+        };
+        restored.push(msg);
+      }
+      sessionIdRef.current = sessionId;
+      setMessages(restored);
+      setStatus("ready");
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const ensureSession = useCallback(async () => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    const res = await apiFetch(`/sessions`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
+    const session = await res.json();
+    sessionIdRef.current = session.id;
+    return session.id as string;
+  }, []);
+
+  /** Queue a message into the live run. "not_streaming" = the run ended
+   *  first; the caller should fall back to a normal send. */
+  const steer = useCallback(
+    async (text: string): Promise<"ok" | "not_streaming" | "error"> => {
+      const id = sessionIdRef.current;
+      if (!id) return "not_streaming";
+      try {
+        const res = await apiFetch(`/sessions/${id}/steer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { pending?: unknown };
+          if (Array.isArray(data.pending)) setPendingSteers(data.pending.map(String));
+          return "ok";
+        }
+        return res.status === 409 ? "not_streaming" : "error";
+      } catch {
+        return "error";
+      }
+    },
+    [],
+  );
+
+  const send = useCallback(
+    // The optional third arg (expert model / attachments / skills / databases)
+    // is accepted for call-site compatibility but no longer used: the Pi
+    // backend runs a single flat agent. Skill/database hints are still injected
+    // into the prompt text by the caller. `computeTarget` is the selected Modal
+    // instance id, forwarded so the modal_run tool defaults to it. `thinkingLevel`
+    // is the extended-thinking level ("off" / "minimal" / "low" / "medium" / "high" / "xhigh").
+    // `images` are inline attachments that ride the user message as image blocks.
+    async (
+      text: string,
+      model?: string,
+      _legacyMeta?: unknown,
+      fusionConfig?: Record<string, unknown>,
+      computeTarget?: string,
+      thinkingLevel?: string,
+      images?: PromptImage[],
+    ): Promise<string | undefined> => {
+      if (!text.trim() || status === "submitted" || status === "streaming") return;
+      sendClaimRef.current = true;
+
+      const userMsgId = nextId();
+      const assistantId = nextId();
+      let runState: TranscriptRunState = { assistantId, sawPromptEcho: false };
+      let transcript: ChatMessage[] = [];
+      setMessages((prev) => {
+        transcript = [
+          ...prev,
+          {
+            id: userMsgId,
+            role: "user",
+            content: text,
+            ...(images && images.length > 0 ? { images } : {}),
+            timestamp: Date.now(),
+          },
+          { id: assistantId, role: "assistant", content: "", timestamp: Date.now() },
+        ];
+        return transcript;
+      });
+      setStatus("submitted");
+
+      try {
+        const sessionId = await ensureSession();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        const startRun = () =>
+          apiFetch(`/sessions/${sessionId}/run`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              buildRunBody({
+                message: text,
+                model,
+                fusionConfig,
+                computeTarget,
+                thinkingLevel,
+                images,
+              }),
+            ),
+            signal: controller.signal,
+          });
+        let res = await startRun();
+        // 409 = previous run still unwinding server-side (e.g. right after
+        // Stop, whose abort completes asynchronously). Retry briefly instead
+        // of losing the message.
+        for (let attempt = 0; res.status === 409 && attempt < 4; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+          res = await startRun();
+        }
+        if (!res.ok) throw new Error(`run failed: ${res.status}`);
+        setStatus("streaming");
+
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("No response body");
+        const decoder = new TextDecoder();
+        let buffer = "";
+        // Synthetic route-level frame at stream open; provisional notebook
+        // entries are stamped with it so run dividers render live.
+        let currentRunId: string | undefined;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const frame = JSON.parse(jsonStr) as AgentFrame;
+              if (frame.type === "run_start" && typeof frame.runId === "string") {
+                currentRunId = frame.runId;
+              }
+              const nb = parseNotebookFrame(frame, currentRunId);
+              if (nb) setNotebookEntries((prev) => mergeNotebookEntries(prev, [nb]));
+              if (frame.type === "tool_end" && frame.toolName === "subagent") {
+                setSubagentCompletions((n) => n + 1);
+              }
+              const r = applyFrameToTranscript(transcript, runState, frame, nextId);
+              transcript = r.messages;
+              runState = r.state;
+              if (r.steering) setPendingSteers(r.steering);
+              setMessages(transcript);
+            } catch {
+              /* skip malformed line */
+            }
+          }
+        }
+
+        transcript = transcript.map((m) =>
+          m.role === "assistant" && m.activities?.some((a) => a.status === "running")
+            ? {
+                ...m,
+                activities: m.activities.map((a) =>
+                  a.status === "running" ? { ...a, status: "complete" as const } : a,
+                ),
+              }
+            : m,
+        );
+        setMessages(transcript);
+        setPendingSteers([]);
+        setStatus("ready");
+      } catch (err: unknown) {
+        const aborted = err instanceof DOMException && err.name === "AbortError";
+        transcript = transcript.map((m) => {
+          const isCurrent = m.id === runState.assistantId;
+          const activities = (m.activities ?? []).map((a) =>
+            a.status === "running"
+              ? { ...a, status: (aborted ? "complete" : "error") as ActivityItem["status"] }
+              : a,
+          );
+          if (!isCurrent) return m.activities ? { ...m, activities } : m;
+          return {
+            ...m,
+            content: aborted
+              ? m.content
+              : m.content || "Something went wrong. Please try again.",
+            activities,
+          };
+        });
+        setMessages(transcript);
+        setPendingSteers([]);
+        setStatus(aborted ? "ready" : "error");
+      } finally {
+        sendClaimRef.current = false;
+        abortRef.current = null;
+      }
+
+      return userMsgId;
+    },
+    [status, ensureSession],
+  );
+
+  const stop = useCallback(async (): Promise<string[]> => {
+    abortRef.current?.abort();
+    const id = sessionIdRef.current;
+    let restored: string[] = [];
+    if (id) {
+      try {
+        const res = await apiFetch(`/sessions/${id}/abort`, { method: "POST" });
+        if (res.ok) {
+          const data = (await res.json()) as { restored?: unknown };
+          if (Array.isArray(data.restored)) restored = data.restored.map(String);
+        }
+      } catch {
+        /* abort is best-effort; restore is a bonus */
+      }
+    }
+    setPendingSteers([]);
+    setStatus("ready");
+    return restored;
+  }, []);
+
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    setMessages([]);
+    setNotebookEntries([]);
+    setSubagentCompletions(0);
+    setPendingSteers([]);
+    setStatus("ready");
+    sessionIdRef.current = null;
+  }, []);
+
+  useEffect(() => onProjectChange(() => reset()), [reset]);
+
+  const getSessionId = useCallback(() => sessionIdRef.current, []);
+
+  return {
+    messages,
+    status,
+    send,
+    stop,
+    reset,
+    getSessionId,
+    loadSession,
+    steer,
+    pendingSteers,
+    notebookEntries,
+    subagentCompletions,
+  };
+}

@@ -1,0 +1,14 @@
+ResearchCraft
+=============
+
+This product is a white-labeled fork of the open-source project
+**K-Dense BYOK** (MIT License), originally developed by K-Dense, Inc.
+
+  Upstream project: https://github.com/K-Dense-AI/k-dense-byok
+  Original copyright: Copyright (c) 2026 K-Dense
+
+Scientific skills are seeded from the open-source catalogue
+`K-Dense-AI/scientific-agent-skills` (also MIT / open source).
+
+ResearchCraft branding, assets, and modifications © ResearchCraft.
+Site: https://researchcraft.dev

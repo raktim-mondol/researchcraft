@@ -1,0 +1,74 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: backend (vitest, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        working-directory: server
+        run: npm install
+      - name: Typecheck
+        working-directory: server
+        run: npm run typecheck
+      - name: Run tests
+        working-directory: server
+        run: npm test
+
+  frontend:
+    name: frontend (vitest, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Run tests
+        working-directory: web
+        run: npm run test
+
+  launcher-smoke:
+    name: launcher --check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Run start.sh --check
+        if: runner.os != 'Windows'
+        run: ./start.sh --check
+      - name: Run start.cmd --check
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: start.cmd --check

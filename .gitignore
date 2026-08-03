@@ -1,0 +1,72 @@
+# Python
+.Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv
+.pytest_cache/
+.coverage
+
+# UV
+/uv.lock
+server/src/helpers/.venv/
+server/src/helpers/uv.lock
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OAuth tokens for Scite / Consensus MCP (local only)
+.mcp-oauth/
+
+# Credentials
+vertex_ai_credentials.json
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE / Editor
+.cursor
+.vscode/
+.idea/
+*.iml
+
+# AI / Agent
+.adk/
+.gemini/
+
+# Testing
+coverage/
+.nyc_output/
+benchmarking/
+
+# Project
+/projects
+/graphify-out
+TODO.md
+.agents/
+.claude/
+skills-lock.json
+AGENTS.md
+CLAUDE.md
