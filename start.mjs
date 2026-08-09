@@ -6,8 +6,9 @@
  * Node itself exists, then exec this file.
  *
  * Flags:
- *   --check       report dependencies/environment and exit (no installs, no services)
- *   --no-browser  don't open the UI in a browser once it's up
+ *   --check          report dependencies/environment and exit (no installs, no services)
+ *   --no-browser     don't open the UI in a browser once it's up
+ *   --force-install  always run `npm install` (default: skip when deps look current)
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,6 +22,10 @@ const isWin = process.platform === "win32";
 const flags = {
   check: process.argv.includes("--check"),
   noBrowser: process.argv.includes("--no-browser"),
+  forceInstall:
+    process.argv.includes("--force-install") ||
+    process.env.FORCE_INSTALL === "1" ||
+    process.env.FORCE_INSTALL === "true",
 };
 
 // Legacy conhost garbles unicode; Windows Terminal (WT_SESSION) renders it fine.
@@ -182,7 +187,54 @@ async function checkModelAccess() {
 
 // ---- Step 3: npm install ----------------------------------------------------
 
+/**
+ * True when we should run `npm install` for a package root (server/ or web/).
+ *
+ * Skip when node_modules already exists and looks at least as new as
+ * package.json / package-lock.json. npm writes node_modules/.package-lock.json
+ * on install; we prefer that stamp when present. First run, missing deps, or
+ * --force-install always install.
+ */
+function needsNpmInstall(dir) {
+  if (flags.forceInstall) return true;
+  const root = path.join(repoRoot, dir);
+  const nm = path.join(root, "node_modules");
+  const pkgJson = path.join(root, "package.json");
+  if (!fs.existsSync(pkgJson)) return true;
+  if (!fs.existsSync(nm)) return true;
+
+  // Smoke-check: empty or truncated installs leave node_modules without packages.
+  try {
+    const entries = fs.readdirSync(nm).filter((n) => n !== ".bin" && !n.startsWith("."));
+    if (entries.length === 0) return true;
+  } catch {
+    return true;
+  }
+
+  const pkgMtime = fs.statSync(pkgJson).mtimeMs;
+  const lockPath = path.join(root, "package-lock.json");
+  const lockMtime = fs.existsSync(lockPath) ? fs.statSync(lockPath).mtimeMs : 0;
+  const newestManifest = Math.max(pkgMtime, lockMtime);
+
+  // npm's install stamp (preferred) — updated only when install actually runs.
+  const stampPath = path.join(nm, ".package-lock.json");
+  if (fs.existsSync(stampPath)) {
+    return newestManifest > fs.statSync(stampPath).mtimeMs + 1; // +1ms avoids equal-clock false positives
+  }
+
+  // Fallback: compare package.json age to node_modules directory mtime.
+  try {
+    return newestManifest > fs.statSync(nm).mtimeMs + 1;
+  } catch {
+    return true;
+  }
+}
+
 function installPackages(dir, label) {
+  if (!needsNpmInstall(dir)) {
+    log(`  ${label} packages ${sym.ok} (already installed — skip npm install)`);
+    return;
+  }
   log(`Installing ${label} packages...`);
   const code = run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], {
     cwd: path.join(repoRoot, dir),
@@ -420,6 +472,9 @@ if (flags.check) {
   process.exit(0);
 }
 
+// Only npm-install when node_modules is missing or out of date vs package.json
+// / lockfile. Subsequent starts skip the slow install. Use --force-install to
+// reinstall always (or FORCE_INSTALL=1).
 installPackages("server", "backend");
 installPackages("web", "frontend");
 log("");
