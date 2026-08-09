@@ -603,15 +603,21 @@ function ImageGenForm({
         <select
           id="image-provider"
           value={provider}
-          className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
           onChange={(e) => {
             setProvider(e.target.value);
             setSaved(false);
           }}
         >
-          <option value="auto">Auto (from model id)</option>
-          <option value="openai">OpenAI Images API</option>
-          <option value="gemini">Google Gemini (Nano Banana)</option>
+          <option value="auto" className="bg-background text-foreground">
+            Auto (from model id)
+          </option>
+          <option value="openai" className="bg-background text-foreground">
+            OpenAI Images API
+          </option>
+          <option value="gemini" className="bg-background text-foreground">
+            Google Gemini (Nano Banana)
+          </option>
         </select>
       </div>
 
