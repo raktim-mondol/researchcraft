@@ -5,6 +5,8 @@
  *   - LLM_BASE_URL  — e.g. https://api.openai.com/v1, http://localhost:11434/v1
  *   - LLM_API_KEY   — Bearer token for that endpoint (optional for some local servers)
  *   - LLM_MODEL     — model id the endpoint expects
+ *   - LLM_CONTEXT_WINDOW — optional token context budget for the meter / compaction
+ *     (defaults to 1_000_000 when unset or invalid)
  *
  * Internally Pi still uses the "openrouter" provider slot (its built-in
  * OpenAI-completions path) so subagent child `pi` processes can pick up the
@@ -17,10 +19,32 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 /** Canonical provider id used in Pi Model objects (OpenAI-compatible path). */
 export const LLM_PROVIDER = "openrouter";
 
+/**
+ * Default context-window size when LLM_CONTEXT_WINDOW is unset or invalid.
+ * Providers vary widely (32k–2M+); 1M is a safe high default for modern
+ * frontier models so the usage meter is not artificially capped at 128k.
+ */
+export const DEFAULT_LLM_CONTEXT_WINDOW = 1_000_000;
+
 export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** Token budget used by Pi for context % / auto-compact (not an API hard limit). */
+  contextWindow: number;
+}
+
+/**
+ * Parse a context-window env/setting value.
+ * Accepts integers (and integer-like strings); rejects 0, negatives, NaN.
+ */
+export function parseContextWindow(raw: string | undefined | null): number {
+  if (raw == null) return DEFAULT_LLM_CONTEXT_WINDOW;
+  const s = String(raw).trim().replace(/_/g, "");
+  if (!s) return DEFAULT_LLM_CONTEXT_WINDOW;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LLM_CONTEXT_WINDOW;
+  return Math.floor(n);
 }
 
 /** Read the live LLM endpoint config from the environment. */
@@ -41,7 +65,8 @@ export function getLlmConfig(): LlmConfig {
     process.env.DEFAULT_MODEL_ID ||
     ""
   ).trim();
-  return { baseUrl, apiKey, model };
+  const contextWindow = parseContextWindow(process.env.LLM_CONTEXT_WINDOW);
+  return { baseUrl, apiKey, model, contextWindow };
 }
 
 /** True when enough is set to attempt a model call. */
@@ -71,7 +96,7 @@ export function buildConfiguredModel(ref?: string): Model<Api> {
     // No catalogue pricing — cost tracking shows $0 unless the provider
     // reports usage the user meters externally.
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
+    contextWindow: cfg.contextWindow,
     maxTokens: 8192,
   };
 }

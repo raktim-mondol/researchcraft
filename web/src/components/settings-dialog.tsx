@@ -216,7 +216,7 @@ function KeyRow({
   );
 }
 
-/** Primary model endpoint — base URL + API key + model name. */
+/** Primary model endpoint — base URL + API key + model name + context window. */
 function LlmEndpointForm({
   status,
   onStatus,
@@ -227,6 +227,7 @@ function LlmEndpointForm({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  const [contextWindow, setContextWindow] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -238,6 +239,7 @@ function LlmEndpointForm({
     if (!status || hydrated) return;
     setBaseUrl(status.llmBaseUrl?.value ?? "");
     setModel(status.llmModel?.value ?? "");
+    setContextWindow(status.llmContextWindow?.value ?? "");
     setHydrated(true);
   }, [status, hydrated]);
 
@@ -249,6 +251,8 @@ function LlmEndpointForm({
       const body: Record<string, string | null> = {
         llmBaseUrl: baseUrl.trim() || null,
         llmModel: model.trim() || null,
+        // Empty → clear env var so the server uses the 1M default.
+        llmContextWindow: contextWindow.trim() || null,
       };
       // Only send the key when the user typed a new one (empty = leave as-is).
       if (apiKey.trim()) body.llmApiKey = apiKey.trim();
@@ -263,6 +267,8 @@ function LlmEndpointForm({
       if (!res.ok) throw new Error(data?.detail || `Save failed (${res.status})`);
       if (data) onStatus(data as CredentialStatus);
       setApiKey("");
+      // Reflect normalized value from the server (e.g. stripped commas).
+      setContextWindow(data?.llmContextWindow?.value ?? contextWindow.trim());
       setSaved(true);
       window.dispatchEvent(new Event("llm-config-changed"));
     } catch (exc) {
@@ -270,7 +276,7 @@ function LlmEndpointForm({
     } finally {
       setSaving(false);
     }
-  }, [baseUrl, apiKey, model, onStatus]);
+  }, [baseUrl, apiKey, model, contextWindow, onStatus]);
 
   const clearAll = useCallback(async () => {
     setSaving(true);
@@ -284,6 +290,7 @@ function LlmEndpointForm({
           llmBaseUrl: null,
           llmApiKey: null,
           llmModel: null,
+          llmContextWindow: null,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -294,6 +301,7 @@ function LlmEndpointForm({
       setBaseUrl("");
       setApiKey("");
       setModel("");
+      setContextWindow("");
       setSaved(true);
       window.dispatchEvent(new Event("llm-config-changed"));
     } catch (exc) {
@@ -400,6 +408,33 @@ function LlmEndpointForm({
         </p>
       </div>
 
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium" htmlFor="llm-context-window">
+          Context window (tokens)
+        </label>
+        <Input
+          id="llm-context-window"
+          type="text"
+          inputMode="numeric"
+          value={contextWindow}
+          autoComplete="off"
+          placeholder="1000000 (default)"
+          className="h-8 text-xs font-mono"
+          onChange={(e) => {
+            setContextWindow(e.target.value);
+            setSaved(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canSave) void submit();
+          }}
+        />
+        <p className="text-[11px] text-muted-foreground">
+          From your model docs / OpenRouter{" "}
+          <code className="text-[10px]">context_length</code>. Used for the
+          context meter and compaction — leave blank to use the 1M default.
+        </p>
+      </div>
+
       <div className="flex items-center gap-2 pt-1">
         <Button
           size="sm"
@@ -409,7 +444,10 @@ function LlmEndpointForm({
         >
           {saving ? "Saving…" : "Save model"}
         </Button>
-        {(status?.llmBaseUrl?.set || status?.llmModel?.set || status?.llmApiKey?.set) && (
+        {(status?.llmBaseUrl?.set ||
+          status?.llmModel?.set ||
+          status?.llmApiKey?.set ||
+          status?.llmContextWindow?.set) && (
           <Button
             variant="ghost"
             size="sm"

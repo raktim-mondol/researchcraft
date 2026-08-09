@@ -19,13 +19,23 @@ export interface UseModelsReturn {
   baseUrl: string;
 }
 
-function toModel(id: string, baseUrl?: string): Model {
+/** Matches server DEFAULT_LLM_CONTEXT_WINDOW when LLM_CONTEXT_WINDOW is unset. */
+export const DEFAULT_LLM_CONTEXT_WINDOW = 1_000_000;
+
+function parseContextLength(raw: string | undefined): number {
+  if (!raw) return DEFAULT_LLM_CONTEXT_WINDOW;
+  const n = Number(String(raw).trim().replace(/_/g, "").replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LLM_CONTEXT_WINDOW;
+  return Math.floor(n);
+}
+
+function toModel(id: string, baseUrl?: string, contextLength?: number): Model {
   return {
     id,
     label: id,
     provider: "Custom",
     tier: "flagship",
-    context_length: 128_000,
+    context_length: contextLength ?? DEFAULT_LLM_CONTEXT_WINDOW,
     pricing: { prompt: 0, completion: 0 },
     modality: "text->text",
     description: baseUrl
@@ -37,8 +47,8 @@ function toModel(id: string, baseUrl?: string): Model {
 
 /**
  * Single source of truth for the active model: whatever the user saved under
- * Settings (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL). No OpenRouter catalogue,
- * no Fusion presets, no Ollama tag discovery.
+ * Settings (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_CONTEXT_WINDOW).
+ * No OpenRouter catalogue, no Fusion presets, no Ollama tag discovery.
  */
 export function useModels(): UseModelsReturn {
   const [models, setModels] = useState<Model[]>([]);
@@ -52,8 +62,9 @@ export function useModels(): UseModelsReturn {
         if (!data) return;
         const modelName = (data.llmModel?.value || data.llm?.value || "").trim();
         const url = (data.llmBaseUrl?.value || "").trim();
+        const ctx = parseContextLength(data.llmContextWindow?.value);
         setBaseUrl(url);
-        setModels(modelName ? [toModel(modelName, url)] : []);
+        setModels(modelName ? [toModel(modelName, url, ctx)] : []);
       })
       .catch(() => {
         setModels([]);

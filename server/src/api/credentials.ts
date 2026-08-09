@@ -12,7 +12,7 @@
  *                          restart.
  *
  * Managed values:
- *   - LLM endpoint (base URL + API key + model name) — every model call
+ *   - LLM endpoint (base URL + API key + model name + optional context window)
  *   - Optional pi-web-access search keys (Exa, Perplexity, Gemini)
  *   - Parallel Search MCP + Firecrawl MCP API keys (higher rate limits)
  *   - Modal remote-compute token pair
@@ -84,6 +84,15 @@ const MANAGED_KEYS: ManagedKey[] = [
     bodyField: "llmModel",
     envVar: "LLM_MODEL",
     envAliases: ["DEFAULT_MODEL_ID"],
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    // Token context budget for the session meter / compaction (not an API hard limit).
+    // Empty / clear → app default (1_000_000) via parseContextWindow in models.ts.
+    id: "llmContextWindow",
+    bodyField: "llmContextWindow",
+    envVar: "LLM_CONTEXT_WINDOW",
     allowShort: true,
     isPlainText: true,
   },
@@ -187,6 +196,22 @@ function applyKey(spec: ManagedKey, raw: string | null): string | null {
     } catch {
       return "Base URL must be a valid URL (e.g. https://api.openai.com/v1)";
     }
+  }
+  if (spec.id === "llmContextWindow") {
+    const normalized = key.replace(/_/g, "").replace(/,/g, "");
+    const n = Number(normalized);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      return "Context window must be a positive integer (token count), e.g. 200000 or 1000000";
+    }
+    // Cap absurd typos (e.g. extra zeros) without blocking multi‑million windows.
+    if (n > 100_000_000) {
+      return "Context window looks too large (max 100000000). Check the model docs for the real limit.";
+    }
+    const stored = String(n);
+    process.env[spec.envVar] = stored;
+    persistEnv(spec.envVar, stored);
+    spec.onChange?.(stored);
+    return null;
   }
   process.env[spec.envVar] = key;
   persistEnv(spec.envVar, key);
