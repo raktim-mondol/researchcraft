@@ -24,7 +24,7 @@ import {
   useState,
 } from "react";
 
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon, PanelRightIcon } from "lucide-react";
 import { rawFileUrl } from "@/lib/use-sandbox";
 import {
   type Annotation,
@@ -190,6 +190,8 @@ export function PdfViewer({
 
   const [mode, setMode] = useState<"none" | "highlight" | "note">("none");
   const [showExpert, setShowExpert] = useState(true);
+  // Annotations list is opt-in — keep the PDF full-width until the user opens it.
+  const [showAnnotationsPanel, setShowAnnotationsPanel] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] =
     useState<string | null>(null);
   const [pendingNote, setPendingNote] = useState<{
@@ -647,6 +649,9 @@ export function PdfViewer({
         showExpert={showExpert}
         setShowExpert={setShowExpert}
         hideAnnotationUi={hideAnnotationUi}
+        showAnnotationsPanel={showAnnotationsPanel}
+        setShowAnnotationsPanel={setShowAnnotationsPanel}
+        annotationCount={visibleAnnotations.length}
         openHref={rawFileUrl(path)}
         onJumpPage={(p) => {
           const el = containerRef.current?.querySelector<HTMLElement>(
@@ -693,11 +698,12 @@ export function PdfViewer({
           </div>
         </div>
 
-        {!hideAnnotationUi && (
+        {!hideAnnotationUi && showAnnotationsPanel && (
           <AnnotationSidebar
             annotations={visibleAnnotations}
             onJump={jumpToAnnotation}
             onRemove={removeAnnotation}
+            onClose={() => setShowAnnotationsPanel(false)}
           />
         )}
       </div>
@@ -743,6 +749,9 @@ function Toolbar({
   showExpert,
   setShowExpert,
   hideAnnotationUi,
+  showAnnotationsPanel,
+  setShowAnnotationsPanel,
+  annotationCount,
   openHref,
   onJumpPage,
 }: {
@@ -756,6 +765,9 @@ function Toolbar({
   showExpert: boolean;
   setShowExpert: (v: boolean) => void;
   hideAnnotationUi: boolean;
+  showAnnotationsPanel: boolean;
+  setShowAnnotationsPanel: (v: boolean) => void;
+  annotationCount: number;
   openHref: string;
   onJumpPage: (p: number) => void;
 }) {
@@ -849,6 +861,32 @@ function Toolbar({
             />
             Expert annotations
           </label>
+        )}
+        {!hideAnnotationUi && (
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded px-2 py-1",
+              showAnnotationsPanel
+                ? "bg-muted font-medium"
+                : "hover:bg-muted",
+            )}
+            title={
+              showAnnotationsPanel
+                ? "Hide annotations panel"
+                : "Show annotations panel"
+            }
+            aria-pressed={showAnnotationsPanel}
+            onClick={() => setShowAnnotationsPanel(!showAnnotationsPanel)}
+          >
+            <PanelRightIcon className="size-3.5" />
+            Annotations
+            {annotationCount > 0 && (
+              <span className="tabular-nums text-muted-foreground">
+                ({annotationCount})
+              </span>
+            )}
+          </button>
         )}
         {/* Browser-native find/print/download live in the browser's own PDF
             viewer — this pane doesn't reimplement them. */}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { XIcon } from "lucide-react";
 
 import {
   type Annotation,
@@ -12,11 +13,14 @@ export interface AnnotationSidebarProps {
   annotations: Annotation[];
   onJump: (a: Annotation) => void;
   onRemove: (id: string) => void;
+  /** Optional close control (parent owns open/closed state). */
+  onClose?: () => void;
 }
 
 export function AnnotationSidebar({
   annotations,
   onJump,
+  onClose,
 }: AnnotationSidebarProps) {
   const groups = useMemo(() => {
     const byPage = new Map<number, Annotation[]>();
@@ -28,10 +32,23 @@ export function AnnotationSidebar({
   }, [annotations]);
 
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-l bg-background/40 md:flex">
-      <div className="shrink-0 border-b px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Annotations
-        <span className="ml-1 text-foreground/60">({annotations.length})</span>
+    <aside className="flex w-64 shrink-0 flex-col border-l bg-background/40">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <span>
+          Annotations
+          <span className="ml-1 text-foreground/60">({annotations.length})</span>
+        </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            title="Hide annotations panel"
+            aria-label="Hide annotations panel"
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-auto">
         {groups.length === 0 && (
