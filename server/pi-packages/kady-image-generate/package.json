@@ -1,0 +1,15 @@
+{
+  "name": "kady-image-generate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ResearchCraft: gives child pi processes the image_generate tool for text-to-image into the sandbox.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

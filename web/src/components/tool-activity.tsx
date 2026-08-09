@@ -9,6 +9,7 @@ import {
   FileIcon,
   FilePlusIcon,
   FolderTreeIcon,
+  ImageIcon,
   SearchIcon,
   TerminalIcon,
   UsersIcon,
@@ -45,6 +46,8 @@ function iconFor(toolName?: string) {
       return FolderTreeIcon;
     case "subagent":
       return UsersIcon;
+    case "image_generate":
+      return ImageIcon;
     default:
       return WrenchIcon;
   }
@@ -58,6 +61,12 @@ function summarize(toolName: string | undefined, args: unknown): string {
       typeof v === "string" ? v.split("\n")[0] : "";
     if (toolName === "bash" && typeof a.command === "string")
       return firstLine(a.command);
+    if (toolName === "image_generate") {
+      const p = typeof a.path === "string" ? a.path : "";
+      const prompt = typeof a.prompt === "string" ? firstLine(a.prompt) : "";
+      if (p && prompt) return `${p} — ${prompt}`;
+      return p || prompt;
+    }
     const pathish = a.path ?? a.file_path ?? a.filePath ?? a.pattern ?? a.query;
     if (typeof pathish === "string") return pathish;
     if (toolName === "subagent") {

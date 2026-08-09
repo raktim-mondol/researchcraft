@@ -13,6 +13,7 @@
  *
  * Managed values:
  *   - LLM endpoint (base URL + API key + model name + optional context window)
+ *   - Image generation (IMAGE_MODEL + optional provider / base URL / key)
  *   - Optional pi-web-access search keys (Exa, Perplexity, Gemini)
  *   - Parallel Search MCP + Firecrawl MCP API keys (higher rate limits)
  *   - Modal remote-compute token pair
@@ -95,6 +96,33 @@ const MANAGED_KEYS: ManagedKey[] = [
     envVar: "LLM_CONTEXT_WINDOW",
     allowShort: true,
     isPlainText: true,
+  },
+  // Text-to-image (OpenAI Images + Gemini Nano Banana). IMAGE_MODEL enables the tool.
+  {
+    id: "imageModel",
+    bodyField: "imageModel",
+    envVar: "IMAGE_MODEL",
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    id: "imageProvider",
+    bodyField: "imageProvider",
+    envVar: "IMAGE_PROVIDER",
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    id: "imageBaseUrl",
+    bodyField: "imageBaseUrl",
+    envVar: "IMAGE_BASE_URL",
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    id: "imageApiKey",
+    bodyField: "imageApiKey",
+    envVar: "IMAGE_API_KEY",
   },
   { id: "exa", bodyField: "exaApiKey", envVar: "EXA_API_KEY" },
   { id: "perplexity", bodyField: "perplexityApiKey", envVar: "PERPLEXITY_API_KEY" },
@@ -186,7 +214,7 @@ function applyKey(spec: ManagedKey, raw: string | null): string | null {
   if (!spec.allowShort && !spec.isPlainText && key.length < 8) {
     return "That key looks too short to be valid.";
   }
-  if (spec.id === "llmBaseUrl") {
+  if (spec.id === "llmBaseUrl" || spec.id === "imageBaseUrl") {
     // Light validation — must look like an absolute URL.
     try {
       const u = new URL(key);
@@ -196,6 +224,23 @@ function applyKey(spec: ManagedKey, raw: string | null): string | null {
     } catch {
       return "Base URL must be a valid URL (e.g. https://api.openai.com/v1)";
     }
+  }
+  if (spec.id === "imageProvider") {
+    const p = key.toLowerCase();
+    if (p !== "openai" && p !== "gemini" && p !== "auto") {
+      return 'Image provider must be "openai", "gemini", or "auto" (or leave blank)';
+    }
+    // "auto" clears the override so model-id inference applies.
+    if (p === "auto") {
+      for (const name of [spec.envVar, ...(spec.envAliases ?? [])]) delete process.env[name];
+      persistEnv(spec.envVar, null);
+      spec.onChange?.(null);
+      return null;
+    }
+    process.env[spec.envVar] = p;
+    persistEnv(spec.envVar, p);
+    spec.onChange?.(p);
+    return null;
   }
   if (spec.id === "llmContextWindow") {
     const normalized = key.replace(/_/g, "").replace(/,/g, "");

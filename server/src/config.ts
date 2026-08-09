@@ -46,3 +46,6 @@ export function modalConfigured(): boolean {
 export function runpodConfigured(): boolean {
   return Boolean(process.env.RUNPOD_API_KEY?.trim());
 }
+
+/** Whether text-to-image is configured (IMAGE_MODEL + provider credentials). */
+export { imageGenConfigured } from "./agent/image-gen-config.ts";

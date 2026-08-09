@@ -64,7 +64,7 @@ const KEY_DEFS: KeyDef[] = [
     label: "Gemini API key (optional)",
     placeholder: "AIza…",
     keysUrl: "https://aistudio.google.com/apikey",
-    hint: "Search fallback plus YouTube and video understanding for fetched links.",
+    hint: "Search fallback, YouTube/video understanding, and Gemini Nano Banana image generation (when IMAGE_MODEL is a gemini-*-image model).",
   },
   {
     id: "parallel",
@@ -468,6 +468,231 @@ function LlmEndpointForm({
   );
 }
 
+/** Optional text-to-image (OpenAI Images + Gemini Nano Banana). */
+function ImageGenForm({
+  status,
+  onStatus,
+}: {
+  status: CredentialStatus | null;
+  onStatus: (status: CredentialStatus) => void;
+}) {
+  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState("auto");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (!status || hydrated) return;
+    setModel(status.imageModel?.value ?? "");
+    setProvider(status.imageProvider?.value || "auto");
+    setBaseUrl(status.imageBaseUrl?.value ?? "");
+    setHydrated(true);
+  }, [status, hydrated]);
+
+  const submit = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const body: Record<string, string | null> = {
+        imageModel: model.trim() || null,
+        imageProvider: provider === "auto" ? null : provider,
+        imageBaseUrl: baseUrl.trim() || null,
+      };
+      if (apiKey.trim()) body.imageApiKey = apiKey.trim();
+      const res = await apiFetch("/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | (CredentialStatus & { detail?: string })
+        | null;
+      if (!res.ok) throw new Error(data?.detail || `Save failed (${res.status})`);
+      if (data) onStatus(data as CredentialStatus);
+      setApiKey("");
+      setSaved(true);
+      window.dispatchEvent(new Event("llm-config-changed"));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }, [model, provider, baseUrl, apiKey, onStatus]);
+
+  const clearAll = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await apiFetch("/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageModel: null,
+          imageProvider: null,
+          imageBaseUrl: null,
+          imageApiKey: null,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | (CredentialStatus & { detail?: string })
+        | null;
+      if (!res.ok) throw new Error(data?.detail || `Clear failed (${res.status})`);
+      if (data) onStatus(data as CredentialStatus);
+      setModel("");
+      setProvider("auto");
+      setBaseUrl("");
+      setApiKey("");
+      setSaved(true);
+      window.dispatchEvent(new Event("llm-config-changed"));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Clear failed");
+    } finally {
+      setSaving(false);
+    }
+  }, [onStatus]);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3">
+      <div>
+        <h4 className="text-xs font-medium">Image generation (optional)</h4>
+        <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+          Enables the agent{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-[10px]">image_generate</code>{" "}
+          tool for conceptual figures (OpenAI GPT Image / Gemini Nano Banana).
+          Not for quantitative data plots — use Python for those. After saving,
+          open a <strong>new chat tab</strong> so the tool registers.
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium" htmlFor="image-model">
+          Image model
+        </label>
+        <Input
+          id="image-model"
+          type="text"
+          value={model}
+          autoComplete="off"
+          placeholder="gpt-image-2 or gemini-2.5-flash-image"
+          className="h-8 text-xs font-mono"
+          onChange={(e) => {
+            setModel(e.target.value);
+            setSaved(false);
+          }}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium" htmlFor="image-provider">
+          Provider
+        </label>
+        <select
+          id="image-provider"
+          value={provider}
+          className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+          onChange={(e) => {
+            setProvider(e.target.value);
+            setSaved(false);
+          }}
+        >
+          <option value="auto">Auto (from model id)</option>
+          <option value="openai">OpenAI Images API</option>
+          <option value="gemini">Google Gemini (Nano Banana)</option>
+        </select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium" htmlFor="image-base-url">
+          Image base URL (OpenAI path, optional)
+        </label>
+        <Input
+          id="image-base-url"
+          type="url"
+          value={baseUrl}
+          autoComplete="off"
+          placeholder="Defaults to model endpoint base URL"
+          className="h-8 text-xs font-mono"
+          onChange={(e) => {
+            setBaseUrl(e.target.value);
+            setSaved(false);
+          }}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium" htmlFor="image-api-key">
+          Image API key (optional)
+        </label>
+        {status?.imageApiKey?.set && (
+          <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+            <span>
+              Override set — <code className="font-mono">{status.imageApiKey.masked}</code>
+            </span>
+          </div>
+        )}
+        <Input
+          id="image-api-key"
+          type="password"
+          value={apiKey}
+          autoComplete="off"
+          placeholder={
+            status?.imageApiKey?.set
+              ? "Leave blank to keep current override"
+              : "Leave blank: OpenAI uses model key; Gemini uses GEMINI_API_KEY"
+          }
+          className="h-8 text-xs font-mono"
+          onChange={(e) => {
+            setApiKey(e.target.value);
+            setSaved(false);
+          }}
+        />
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          className="text-xs"
+          disabled={saving}
+          onClick={() => void submit()}
+        >
+          {saving ? "Saving…" : "Save image settings"}
+        </Button>
+        {(status?.imageModel?.set ||
+          status?.imageBaseUrl?.set ||
+          status?.imageApiKey?.set ||
+          status?.imageProvider?.set) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-destructive hover:text-destructive"
+            disabled={saving}
+            onClick={() => void clearAll()}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      {saved && (
+        <p className="text-[11px] text-emerald-600 dark:text-emerald-400">
+          Saved. Open a new chat tab to use image_generate.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ApiKeysPanel() {
   const [statusState, setStatusState] = useState<CredentialStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -500,7 +725,7 @@ function ApiKeysPanel() {
           (saved to{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[11px]">.env</code>
           ) — nothing is sent to ResearchCraft servers. Configure your model
-          endpoint below; search, Modal, and Runpod keys are optional.
+          endpoint below; image generation, search, Modal, and Runpod are optional.
         </p>
       </div>
 
@@ -515,6 +740,7 @@ function ApiKeysPanel() {
       ) : (
         <div className="flex flex-col gap-5">
           <LlmEndpointForm status={statusState} onStatus={setStatusState} />
+          <ImageGenForm status={statusState} onStatus={setStatusState} />
           <div className="border-t pt-4">
             <h4 className="text-xs font-medium mb-3 text-muted-foreground">
               Optional integrations

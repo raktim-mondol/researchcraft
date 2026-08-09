@@ -20,7 +20,7 @@ import {
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import type { ProjectPaths } from "../projects.ts";
-import { modalConfigured, runpodConfigured } from "../config.ts";
+import { imageGenConfigured, modalConfigured, runpodConfigured } from "../config.ts";
 import { getMcpTools } from "./mcp.ts";
 import { ensureSearchMcpServers } from "./search-mcp.ts";
 import { defaultModel, setupAuth } from "./models.ts";
@@ -30,6 +30,7 @@ import { makeInterviewTool } from "./interview.ts";
 import { makeNotebookTool } from "./notebook.ts";
 import { makeModalTool } from "./modal-tool.ts";
 import { makeRunpodTool } from "./runpod-tool.ts";
+import { makeImageGenerateTool } from "./image-generate-tool.ts";
 import { makeSubagentLedgerExtension, subagentsExtensionPath } from "./subagent-bridge.ts";
 import { makeFusionRequestExtension } from "./fusion-bridge.ts";
 import { WEB_ACCESS_TOOLS, ensureWebAccess } from "./web-access-bridge.ts";
@@ -38,6 +39,10 @@ import {
   seedBuiltinAgentNotebookTools,
   makeSubagentNotebookExtension,
 } from "./notebook-bridge.ts";
+import {
+  seedImageGeneratePackage,
+  seedBuiltinAgentImageGenerateTools,
+} from "./image-gen-bridge.ts";
 import { BUILTIN_TOOLS } from "./tools.ts";
 
 // pi-subagents runs each delegation as a child `pi` CLI process. The binary
@@ -108,6 +113,11 @@ async function build(
   // Builtin pi-subagents specialists pin a tools allowlist that would filter
   // the notebook tool out of their child processes — extend it via overrides.
   seedBuiltinAgentNotebookTools(paths);
+  // Image generation package for subagents (only when IMAGE_MODEL + creds set).
+  if (imageGenConfigured()) {
+    seedImageGeneratePackage(paths);
+    seedBuiltinAgentImageGenerateTools(paths);
+  }
   // The ledger extension is created before the session exists, so it reads
   // the live sessionId through this holder (set right after creation).
   const holder: { session?: AgentSession } = {};
@@ -141,6 +151,9 @@ async function build(
   const runpodTool = runpodConfigured()
     ? makeRunpodTool(projectId, () => holder.session?.sessionId ?? "")
     : null;
+  const imageTool = imageGenConfigured()
+    ? makeImageGenerateTool(projectId, () => holder.session?.sessionId ?? "")
+    : null;
   const { session } = await createAgentSession({
     cwd: paths.sandbox,
     model: fallbackModel,
@@ -156,6 +169,7 @@ async function build(
       ...WEB_ACCESS_TOOLS,
       ...(modalTool ? ["modal_run"] : []),
       ...(runpodTool ? ["runpod_run"] : []),
+      ...(imageTool ? ["image_generate"] : []),
       ...mcpTools.map((t) => t.name),
     ],
     customTools: [
@@ -163,6 +177,7 @@ async function build(
       notebookTool,
       ...(modalTool ? [modalTool] : []),
       ...(runpodTool ? [runpodTool] : []),
+      ...(imageTool ? [imageTool] : []),
       ...mcpTools,
     ],
   });

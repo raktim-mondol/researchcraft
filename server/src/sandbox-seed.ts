@@ -98,6 +98,14 @@ Both take sandbox-relative \`files_in\` / \`files_out\`; the local sandbox stays
 canonical. Prefer the provider matching the user's Compute chip selection.
 Read the \`remote-compute\` skill for when to use which tool, instance picks,
 and cost/teardown rules. Lead agent only — subagents do not get these tools.
+
+## Image generation (conceptual figures)
+
+When configured (Settings → API keys → Image model), use **\`image_generate\`** to
+create conceptual diagrams / proposal schematics as PNG files under \`figures/\`.
+Providers: OpenAI GPT Image (\`gpt-image-2\`) or Gemini Nano Banana
+(\`gemini-*-image\`). Prefer Python plots for quantitative data figures.
+Read the \`image-generate\` skill. Available to lead agent and subagents.
 `;
 
 /** Write pyproject.toml + AGENTS.md into the sandbox if missing. Idempotent. */
