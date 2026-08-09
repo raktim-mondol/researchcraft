@@ -21,6 +21,26 @@ describe("extractGeminiImages", () => {
     expect(imgs[0].buffer.toString()).toBe("fake-png");
   });
 
+  it("prefers output_image over thought interim images", () => {
+    const final = Buffer.from("final").toString("base64");
+    const thought = Buffer.from("thought").toString("base64");
+    const imgs = extractGeminiImages({
+      output_image: { data: final, mime_type: "image/png" },
+      steps: [
+        {
+          type: "thought",
+          summary: [{ type: "image", data: thought, mime_type: "image/png" }],
+        },
+        {
+          type: "model_output",
+          content: [{ type: "image", data: final, mime_type: "image/png" }],
+        },
+      ],
+    });
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0].buffer.toString()).toBe("final");
+  });
+
   it("finds generateContent inline_data", () => {
     const png = Buffer.from("bytes").toString("base64");
     const imgs = extractGeminiImages({

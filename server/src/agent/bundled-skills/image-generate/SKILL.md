@@ -33,7 +33,7 @@ sandbox — open it in the file panel or embed it in LaTeX.
 | Provider | Example models | Credentials (separate from chat LLM) |
 | --- | --- | --- |
 | OpenAI Images | `gpt-image-2`, `gpt-image-1`, `dall-e-3` | `IMAGE_BASE_URL` + `IMAGE_API_KEY` (required; never reuse chat Qwen/etc.) |
-| Gemini Nano Banana | `gemini-2.5-flash-image`, `gemini-3.1-flash-image`, `gemini-3-pro-image` | `GEMINI_API_KEY` (or `IMAGE_API_KEY`) |
+| Gemini Nano Banana | `gemini-3.1-flash-image` (default), `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image` | `GEMINI_API_KEY` (or `IMAGE_API_KEY`) |
 
 Gemini supports multi-image compose/edit via `reference_paths`. OpenAI path is
 text-to-image only in this version.

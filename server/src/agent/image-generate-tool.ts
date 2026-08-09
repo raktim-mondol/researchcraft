@@ -22,7 +22,8 @@ import {
 import { generateImages, type ReferenceImage } from "./image-gen-client.ts";
 
 const MAX_REF_BYTES = 7 * 1024 * 1024;
-const MAX_REFS = 8;
+/** Gemini 3.x allows up to 14 reference images depending on model tier. */
+const MAX_REFS = 14;
 
 export const ImageGenerateParams = Type.Object({
   prompt: Type.String({
@@ -41,7 +42,7 @@ export const ImageGenerateParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Override IMAGE_MODEL for this call (e.g. gpt-image-2, gemini-2.5-flash-image, gemini-3.1-flash-image).",
+        "Override IMAGE_MODEL for this call (e.g. gpt-image-2, gemini-3.1-flash-image, gemini-3.1-flash-lite-image, gemini-3-pro-image, gemini-2.5-flash-image).",
     }),
   ),
   size: Type.Optional(
@@ -300,7 +301,7 @@ export function makeImageGenerateTool(
     description: [
       "Generate an image from a text prompt (and optional reference images) and save it into the project sandbox.",
       "Providers: OpenAI Images (gpt-image-2, gpt-image-1, dall-e-3) via /images/generations, or Google Gemini Nano Banana",
-      "(gemini-2.5-flash-image, gemini-3.1-flash-image, gemini-3-pro-image) via the Gemini API.",
+      "(gemini-3.1-flash-image / lite / gemini-3-pro-image / gemini-2.5-flash-image) via Gemini Interactions API.",
       "Use for conceptual diagrams, proposal schematics, cover art, and style mocks — NOT for quantitative plots from data",
       "(prefer Python matplotlib/seaborn for data figures).",
       "Always set `path` under figures/ (e.g. figures/workflow.png). Configure IMAGE_MODEL in Settings → API keys.",

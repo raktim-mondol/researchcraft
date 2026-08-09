@@ -176,21 +176,76 @@ async function generateOpenAI(req: GenerateImageRequest): Promise<GenerateImageR
   }
 }
 
-/** Walk Gemini Interactions / generateContent-ish JSON for image bytes. */
+function mimeOf(o: Record<string, unknown>): string {
+  if (typeof o.mime_type === "string") return o.mime_type;
+  if (typeof o.mimeType === "string") return o.mimeType;
+  return "image/png";
+}
+
+function pushImage(
+  out: GeneratedImage[],
+  seen: Set<string>,
+  b64: string,
+  mime: string,
+): void {
+  if (!b64) return;
+  const key = b64.slice(0, 64) + String(b64.length);
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ buffer: Buffer.from(b64, "base64"), mimeType: mime || "image/png" });
+}
+
+/**
+ * Walk Gemini Interactions / generateContent JSON for image bytes.
+ *
+ * Prefer the Interactions convenience field `output_image` (final image) so we
+ * do not also save interim "thought" composition previews as separate files.
+ * Fall back to model_output steps, then any remaining image parts (generateContent).
+ */
 export function extractGeminiImages(data: unknown): GeneratedImage[] {
   const out: GeneratedImage[] = [];
   const seen = new Set<string>();
 
-  const push = (b64: string, mime: string) => {
-    const key = b64.slice(0, 64) + b64.length;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
-      buffer: Buffer.from(b64, "base64"),
-      mimeType: mime || "image/png",
-    });
-  };
+  if (!data || typeof data !== "object") return out;
+  const root = data as Record<string, unknown>;
 
+  // 1) Official convenience property — last generated image block.
+  if (root.output_image && typeof root.output_image === "object") {
+    const img = root.output_image as Record<string, unknown>;
+    if (typeof img.data === "string" && img.data) {
+      pushImage(out, seen, img.data, mimeOf(img));
+      return out;
+    }
+  }
+
+  // 2) Interactions steps: only model_output (skip type === "thought").
+  if (Array.isArray(root.steps)) {
+    for (const step of root.steps) {
+      if (!step || typeof step !== "object") continue;
+      const s = step as Record<string, unknown>;
+      if (s.type === "thought") continue;
+      if (s.type !== "model_output" && s.type !== undefined) {
+        // Still scan unknown step types below via generic walk if needed
+      }
+      if (s.type === "model_output" || Array.isArray(s.content)) {
+        const content = Array.isArray(s.content) ? s.content : [];
+        for (const block of content) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as Record<string, unknown>;
+          if (b.type === "image" && typeof b.data === "string") {
+            pushImage(out, seen, b.data, mimeOf(b));
+          }
+          const inline = (b.inlineData ?? b.inline_data) as Record<string, unknown> | undefined;
+          if (inline && typeof inline.data === "string") {
+            pushImage(out, seen, inline.data, mimeOf(inline));
+          }
+        }
+      }
+    }
+    if (out.length) return out;
+  }
+
+  // 3) generateContent candidates / generic fallback (no thought filtering).
   const visit = (node: unknown, depth = 0) => {
     if (!node || depth > 12) return;
     if (Array.isArray(node)) {
@@ -199,54 +254,22 @@ export function extractGeminiImages(data: unknown): GeneratedImage[] {
     }
     if (typeof node !== "object") return;
     const o = node as Record<string, unknown>;
+    // Skip thought subtrees entirely when present.
+    if (o.type === "thought") return;
 
-    // Interactions convenience: output_image: { data, mime_type }
-    if (o.output_image && typeof o.output_image === "object") {
-      const img = o.output_image as Record<string, unknown>;
-      if (typeof img.data === "string" && img.data) {
-        push(
-          img.data,
-          typeof img.mime_type === "string"
-            ? img.mime_type
-            : typeof img.mimeType === "string"
-              ? img.mimeType
-              : "image/png",
-        );
-      }
-    }
-
-    // Content block: { type: "image", data, mime_type }
     if (
       (o.type === "image" || o.type === "inline_data" || o.type === "inlineData") &&
       typeof o.data === "string" &&
       o.data
     ) {
-      push(
-        o.data,
-        typeof o.mime_type === "string"
-          ? o.mime_type
-          : typeof o.mimeType === "string"
-            ? o.mimeType
-            : "image/png",
-      );
+      pushImage(out, seen, o.data, mimeOf(o));
     }
-
-    // generateContent: inlineData / inline_data
     const inline = (o.inlineData ?? o.inline_data) as Record<string, unknown> | undefined;
     if (inline && typeof inline.data === "string" && inline.data) {
-      push(
-        inline.data,
-        typeof inline.mimeType === "string"
-          ? inline.mimeType
-          : typeof inline.mime_type === "string"
-            ? inline.mime_type
-            : "image/png",
-      );
+      pushImage(out, seen, inline.data, mimeOf(inline));
     }
-
     for (const v of Object.values(o)) visit(v, depth + 1);
   };
-
   visit(data);
   return out;
 }
@@ -275,10 +298,12 @@ async function generateGeminiInteractions(
     mime_type: "image/png",
   };
   if (req.aspectRatio) responseFormat.aspect_ratio = req.aspectRatio;
-  if (req.imageSize) responseFormat.image_size = req.imageSize;
-  else if (req.size && /^(\d+\.?\d*)?[kK]$/.test(req.size)) {
-    responseFormat.image_size = req.size.toUpperCase().replace("K", "K");
+  // Docs require uppercase K: "0.5K" | "1K" | "2K" | "4K" (lowercase is rejected).
+  const sizeRaw = (req.imageSize || req.size || "").trim();
+  if (sizeRaw && /^[\d.]+[kK]$/.test(sizeRaw)) {
+    responseFormat.image_size = sizeRaw.replace(/k$/i, "K");
   }
+  // Always request image modality (docs allow omitting for defaults; we pin PNG).
   body.response_format = responseFormat;
 
   const url = `${req.baseUrl.replace(/\/+$/, "")}/v1beta/interactions`;

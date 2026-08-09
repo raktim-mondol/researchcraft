@@ -587,7 +587,7 @@ function ImageGenForm({
           type="text"
           value={model}
           autoComplete="off"
-          placeholder="gpt-image-2 or gemini-2.5-flash-image"
+          placeholder="gpt-image-2 or gemini-3.1-flash-image"
           className="h-8 text-xs font-mono"
           onChange={(e) => {
             setModel(e.target.value);

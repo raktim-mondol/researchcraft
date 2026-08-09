@@ -17,7 +17,11 @@ Qwen, Ollama, Claude, etc.; image APIs need their own credentials.
 1. Open **Settings → API keys**.
 2. Under **Image generation**, set **Image model**, for example:
    - OpenAI: `gpt-image-2` (or `gpt-image-1`, `dall-e-3`)
-   - Gemini (Nano Banana): `gemini-2.5-flash-image`, `gemini-3.1-flash-image`, `gemini-3-pro-image`
+   - Gemini Nano Banana (recommended defaults first):
+     - `gemini-3.1-flash-image` — Nano Banana 2 (best general default)
+     - `gemini-3.1-flash-lite-image` — Nano Banana 2 Lite (fast/cheap)
+     - `gemini-3-pro-image` — Nano Banana Pro (highest quality / 4K)
+     - `gemini-2.5-flash-image` — legacy Nano Banana
 3. Credentials (dedicated — **not** the chat endpoint):
    - **OpenAI path:** `IMAGE_BASE_URL` (e.g. `https://api.openai.com/v1`) +
      `IMAGE_API_KEY` (OpenAI `sk-…`). Required even if chat uses another provider.
