@@ -69,16 +69,49 @@ export function ResourceMonitor({ className }: { className?: string }) {
           variant="outline"
           size="sm"
           className={cn(
-            "h-auto gap-2.5 px-2.5 py-1.5 font-mono text-[11px] tabular-nums",
+            // Match SessionContextPill / SessionCostPill: two-line mono chip.
+            "h-auto min-h-[2.375rem] gap-2 px-2.5 py-1 font-mono text-[11px] tabular-nums",
             className,
           )}
           aria-label={`System resources: CPU ${cpuPct}%, memory ${memPct}%${
             gpuPct !== null ? `, GPU ${gpuPct}%` : ""
           }`}
         >
-          <PillSegment icon={CpuIcon} pct={cpuPct} />
-          <PillSegment icon={MemoryStickIcon} pct={memPct} />
-          {gpuPct !== null && <PillSegment icon={GpuIcon} pct={gpuPct} />}
+          <div className="flex flex-col items-end justify-center leading-tight">
+            <span className="flex items-center gap-2">
+              <span className="text-muted-foreground">sys</span>
+              <PillSegment icon={CpuIcon} pct={cpuPct} />
+              <PillSegment icon={MemoryStickIcon} pct={memPct} />
+            </span>
+            <span className="flex items-center gap-2">
+              {gpuPct !== null ? (
+                <PillSegment icon={GpuIcon} pct={gpuPct} />
+              ) : (
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <CpuIcon className="size-3 shrink-0" aria-hidden />
+                  <span className="font-semibold text-foreground">
+                    {stats.cpu.cores}c
+                  </span>
+                </span>
+              )}
+              {diskPct !== null && (
+                <span
+                  className={cn(
+                    "flex items-center gap-1",
+                    TEXT_TONE[toneFor(diskPct)],
+                  )}
+                >
+                  <HardDriveIcon
+                    className="size-3 shrink-0 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <span className="w-[3ch] text-right font-semibold">
+                    {diskPct}%
+                  </span>
+                </span>
+              )}
+            </span>
+          </div>
         </Button>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="w-80 p-4">

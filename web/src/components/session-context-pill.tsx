@@ -74,7 +74,7 @@ export function SessionContextPill({
           variant="outline"
           size="sm"
           className={cn(
-            "h-auto gap-2 px-2.5 py-1 font-mono text-[11px] tabular-nums",
+            "h-auto min-h-[2.375rem] gap-2 px-2.5 py-1 font-mono text-[11px] tabular-nums",
             loading && "opacity-70",
             warn && "border-amber-500/60 text-amber-700 dark:text-amber-400",
             critical && "border-destructive/60 text-destructive",

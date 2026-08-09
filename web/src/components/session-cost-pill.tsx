@@ -69,7 +69,7 @@ export function SessionCostPill({
           variant="outline"
           size="sm"
           className={cn(
-            "h-auto gap-2 px-2.5 py-1 font-mono text-[11px] tabular-nums",
+            "h-auto min-h-[2.375rem] gap-2 px-2.5 py-1 font-mono text-[11px] tabular-nums",
             loading && "opacity-70",
             warnTone &&
               "border-amber-500/60 text-amber-600 dark:text-amber-400",
