@@ -33,6 +33,7 @@ import {
   Trash2Icon,
   WandSparklesIcon,
   PencilIcon,
+  PanelLeftCloseIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -640,9 +641,23 @@ export function FileTreePanel({
               <RefreshCwIcon className="size-3.5" />
             </button>
           </InfoTooltip>
-          <InfoTooltip content="Hide the sandbox panel">
-            <button onClick={onClose} aria-label="Close sandbox panel" className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-              <XIcon className="size-3.5" />
+          <InfoTooltip
+            content={
+              <>
+                <b>Hide file browser</b>
+                <br />
+                Collapse this panel to give the editor more room. A tab on the
+                left edge reopens it.
+              </>
+            }
+          >
+            <button
+              onClick={onClose}
+              type="button"
+              aria-label="Hide file browser"
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <PanelLeftCloseIcon className="size-3.5" />
             </button>
           </InfoTooltip>
         </div>

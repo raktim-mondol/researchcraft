@@ -6,6 +6,7 @@ import {
   HistoryIcon,
   LoaderCircleIcon,
   MessageSquareTextIcon,
+  PanelRightCloseIcon,
   PencilIcon,
   PlusIcon,
   TerminalIcon,
@@ -47,6 +48,8 @@ export interface ChatTabsBarProps {
   onOpenSession: (sessionId: string, title: string) => void;
   /** Session id of the active tab, for reproducibility export. */
   activeSessionId?: string | null;
+  /** Collapse the whole chat column (not a single tab). */
+  onHidePanel?: () => void;
   /** Whether the active tab has any messages worth exporting. */
   canExport?: boolean;
 }
@@ -250,6 +253,7 @@ export function ChatTabsBar({
   onSelectWorkflows,
   onOpenSession,
   activeSessionId,
+  onHidePanel,
   canExport = false,
 }: ChatTabsBarProps) {
   const atLimit = tabs.length >= maxTabs;
@@ -445,6 +449,27 @@ export function ChatTabsBar({
             Workflows
           </button>
         </InfoTooltip>
+        {onHidePanel && (
+          <InfoTooltip
+            content={
+              <>
+                <b>Hide chat</b>
+                <br />
+                Collapse this panel to give the editor more room. A tab on the
+                right edge reopens it. Background chats keep running.
+              </>
+            }
+          >
+            <button
+              onClick={onHidePanel}
+              type="button"
+              aria-label="Hide chat"
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <PanelRightCloseIcon className="size-3.5" />
+            </button>
+          </InfoTooltip>
+        )}
       </div>
     </div>
   );

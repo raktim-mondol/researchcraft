@@ -566,56 +566,6 @@ export default function ChatPage() {
             limitUsd={projectCost.limitUsd}
             loading={costLoading || projectCostLoading}
           />
-          {/* Panel visibility — collapse either side panel to give the center
-              pane (file preview / LaTeX editor) more room. */}
-          <div className="flex items-center gap-0.5 rounded-lg border bg-muted/30 p-0.5">
-            <InfoTooltip
-              content={
-                <>
-                  <b>{sandboxOpen ? "Hide" : "Show"} file browser</b>
-                  <br />
-                  Collapse the left file tree to widen the editor and preview.
-                </>
-              }
-            >
-              <button
-                onClick={toggleSandbox}
-                aria-label={sandboxOpen ? "Hide file browser" : "Show file browser"}
-                aria-pressed={sandboxOpen}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  sandboxOpen
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <PanelLeftIcon className="size-4" />
-              </button>
-            </InfoTooltip>
-            <InfoTooltip
-              content={
-                <>
-                  <b>{chatOpen ? "Hide" : "Show"} chat</b>
-                  <br />
-                  Collapse the right chat panel to widen the editor and preview.
-                </>
-              }
-            >
-              <button
-                onClick={toggleChat}
-                aria-label={chatOpen ? "Hide chat" : "Show chat"}
-                aria-pressed={chatOpen}
-                className={cn(
-                  "rounded-md p-1.5 transition-colors",
-                  chatOpen
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <PanelRightIcon className="size-4" />
-              </button>
-            </InfoTooltip>
-          </div>
           <InfoTooltip
             content={
               <>
@@ -660,8 +610,8 @@ export default function ChatPage() {
       {/* Main content area — three columns: file tree | preview | chat */}
       <div className={cn("flex flex-1 overflow-hidden", isResizing && "select-none")}>
 
-        {/* Left: file tree */}
-        {sandboxOpen && (
+        {/* Left: file tree (hide control lives in this panel's header) */}
+        {sandboxOpen ? (
           <div className="shrink-0 overflow-hidden" style={{ width: treeWidth }}>
             <FileTreePanel
               tree={sandbox.tree}
@@ -688,6 +638,33 @@ export default function ChatPage() {
               onRename={sandbox.renameItem}
               onCreateDir={sandbox.createDir}
             />
+          </div>
+        ) : (
+          <div className="flex shrink-0 items-stretch border-r bg-muted/20">
+            <InfoTooltip
+              content={
+                <>
+                  <b>Show file browser</b>
+                  <br />
+                  Reopen the sandbox file tree on the left.
+                </>
+              }
+            >
+              <button
+                type="button"
+                onClick={toggleSandbox}
+                aria-label="Show file browser"
+                className="flex w-8 flex-col items-center justify-center gap-1 px-1 py-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <PanelLeftIcon className="size-4" />
+                <span
+                  className="text-[10px] font-medium tracking-wide"
+                  style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+                >
+                  Files
+                </span>
+              </button>
+            </InfoTooltip>
           </div>
         )}
 
@@ -723,7 +700,37 @@ export default function ChatPage() {
         {chatOpen && <ResizeHandle onMouseDown={startDrag("chat")} />}
 
         {/* Right: chat / workflows. Kept mounted (hidden via CSS when
-            collapsed) so background chat streams keep running. */}
+            collapsed) so background chat streams keep running. Hide control
+            lives on the chat tabs bar. */}
+        {!chatOpen && (
+          <div className="flex shrink-0 items-stretch border-l bg-muted/20">
+            <InfoTooltip
+              content={
+                <>
+                  <b>Show chat</b>
+                  <br />
+                  Reopen the chat panel on the right. Background runs keep going
+                  while it is hidden.
+                </>
+              }
+            >
+              <button
+                type="button"
+                onClick={toggleChat}
+                aria-label="Show chat"
+                className="flex w-8 flex-col items-center justify-center gap-1 px-1 py-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <PanelRightIcon className="size-4" />
+                <span
+                  className="text-[10px] font-medium tracking-wide"
+                  style={{ writingMode: "vertical-rl" }}
+                >
+                  Chat
+                </span>
+              </button>
+            </InfoTooltip>
+          </div>
+        )}
         <div
           className={cn(
             "flex flex-col border-l overflow-hidden shrink-0",
@@ -744,6 +751,7 @@ export default function ChatPage() {
             onSelectWorkflows={() => setView("workflows")}
             onOpenSession={openSession}
             activeSessionId={activeSessionId}
+            onHidePanel={toggleChat}
             canExport={(activeMeta?.userMessageCount ?? 0) > 0}
           />
 
