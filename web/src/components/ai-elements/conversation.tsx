@@ -14,7 +14,9 @@ export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
     initial="smooth"
-    resize="smooth"
+    // Instant resize while content grows during streaming — smooth resize
+    // fights the main thread when the live bubble updates many times/sec.
+    resize="instant"
     role="log"
     {...props}
   />

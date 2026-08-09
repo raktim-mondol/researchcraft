@@ -9,6 +9,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { WorkflowsPanel } from "@/components/workflows-panel";
 import { ProjectSwitcher } from "@/components/project-switcher";
 import { SessionCostPill } from "@/components/session-cost-pill";
+import { SessionContextPill } from "@/components/session-context-pill";
 import { ResourceMonitor } from "@/components/resource-monitor";
 import { useSessionCost } from "@/lib/use-session-cost";
 import { useProjectCost } from "@/lib/use-project-cost";
@@ -16,8 +17,15 @@ import { APP_VERSION, isVersioned } from "@/lib/version";
 import { BRAND } from "@/lib/brand";
 import { useSkills } from "@/lib/use-skills";
 import { flattenFiles, useSandbox } from "@/lib/use-sandbox";
-import { onProjectChange } from "@/lib/projects";
+import {
+  getActiveProjectId,
+  onProjectChange,
+} from "@/lib/projects";
 import { onChatPrefill } from "@/lib/chat-prefill";
+import {
+  resolveChatTabsForProject,
+  savePersistedChatTabs,
+} from "@/lib/chat-tabs-storage";
 import { isJunkFilePath } from "@/lib/utils";
 import {
   PanelLeftIcon,
@@ -120,6 +128,9 @@ export default function ChatPage() {
   ]);
   const [activeTabId, setActiveTabId] = useState<string>(() => initialTabId);
   const [view, setView] = useState<"chat" | "workflows">("chat");
+  // False until the first restore from localStorage / server finishes so we
+  // don't clobber saved tabs with the empty SSR default strip.
+  const [tabsHydrated, setTabsHydrated] = useState(false);
   // Mirror of tabs in a ref so synchronous handlers can read length without
   // putting impure logic inside a setState updater (which strict mode runs
   // twice for purity testing).
@@ -161,22 +172,35 @@ export default function ChatPage() {
     (tabId: string, meta: ChatTabMeta) => {
       setTabsMeta((prev) => {
         const existing = prev[tabId];
-        // Avoid noisy state updates that would loop back into ChatTab's
-        // onMetaChange dependency array. We compare the small primitive
-        // fields plus identity-equality on the messages array (useAgent
-        // returns a fresh array only when it actually mutates).
+        // Avoid noisy state updates that would re-render the whole page.
+        // Transcript messages stay inside each ChatTab — only status/counts/
+        // notebook flags are lifted. Compare notebookEntries by identity
+        // (useAgent returns a new array only when entries change).
         if (
           existing &&
           existing.sessionId === meta.sessionId &&
           existing.status === meta.status &&
           existing.isStreaming === meta.isStreaming &&
           existing.userMessageCount === meta.userMessageCount &&
-          existing.messages === meta.messages
+          existing.subagentCompletions === meta.subagentCompletions &&
+          existing.notebookEntries === meta.notebookEntries &&
+          existing.contextUsage === meta.contextUsage
         ) {
           return prev;
         }
         return { ...prev, [tabId]: meta };
       });
+      // Bind the Pi session id onto the tab entry once the tab creates or
+      // loads one — needed so we can re-open this transcript after restart.
+      if (meta.sessionId) {
+        setTabs((prev) => {
+          const cur = prev.find((t) => t.id === tabId);
+          if (!cur || cur.sessionId === meta.sessionId) return prev;
+          return prev.map((t) =>
+            t.id === tabId ? { ...t, sessionId: meta.sessionId! } : t,
+          );
+        });
+      }
     },
     [],
   );
@@ -257,24 +281,51 @@ export default function ChatPage() {
     };
   }, []);
 
-  // Switching projects nukes every tab's session, so we reduce the tab list
-  // back to one fresh tab. Each <ChatTab>'s own useAgent listens for the
-  // same event and clears its messages, so this is just bookkeeping for
-  // the strip.
-  useEffect(
-    () =>
-      onProjectChange(() => {
-        const id = makeTabId();
-        tabHandles.current.clear();
-        tabRefCallbacks.current.clear();
-        setTabsMeta({});
-        setTabs([{ id, title: defaultTabTitle(0) }]);
-        setActiveTabId(id);
-        setView("chat");
-        setCostRefreshKey((k) => k + 1);
-      }),
-    [],
-  );
+  // Ignore stale async restores when the user switches projects quickly.
+  const hydrateGenRef = useRef(0);
+
+  /** Load open tabs for a project (localStorage + disk sessions). */
+  const hydrateTabsForProject = useCallback(async (projectId: string) => {
+    const gen = ++hydrateGenRef.current;
+    const blankId = makeTabId();
+    const resolved = await resolveChatTabsForProject(projectId, {
+      maxTabs: MAX_CHAT_TABS,
+      blankTabId: blankId,
+      blankTitle: defaultTabTitle(0),
+    });
+    if (gen !== hydrateGenRef.current) return;
+    tabHandles.current.clear();
+    tabRefCallbacks.current.clear();
+    setTabsMeta({});
+    setTabs(resolved.tabs);
+    setActiveTabId(resolved.activeTabId);
+    setView("chat");
+    setCostRefreshKey((k) => k + 1);
+    setTabsHydrated(true);
+  }, []);
+
+  // First paint + every project switch: restore remembered tabs, or the
+  // most recent non-empty session so restart does not look like a blank slate.
+  useEffect(() => {
+    void hydrateTabsForProject(getActiveProjectId());
+    return onProjectChange((projectId) => {
+      setTabsHydrated(false);
+      void hydrateTabsForProject(projectId);
+    });
+  }, [hydrateTabsForProject]);
+
+  // Persist the open strip (with session ids) whenever it changes after hydrate.
+  useEffect(() => {
+    if (!tabsHydrated) return;
+    savePersistedChatTabs(getActiveProjectId(), {
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        title: t.title,
+        ...(t.sessionId ? { sessionId: t.sessionId } : {}),
+      })),
+      activeTabId,
+    });
+  }, [tabs, activeTabId, tabsHydrated]);
 
   // Ask ResearchCraft handoff: the active tab's composer (mounted even behind the
   // Workflows view) appends the text; this listener makes it visible.
@@ -425,6 +476,7 @@ export default function ChatPage() {
   // ------------------------------------------------------------------
 
   const activeSessionId = activeMeta?.sessionId ?? null;
+  const [compactingContext, setCompactingContext] = useState(false);
 
   const { summary: costSummary, loading: costLoading } = useSessionCost(
     activeSessionId,
@@ -432,6 +484,20 @@ export default function ChatPage() {
   );
   const { summary: projectCost, loading: projectCostLoading } =
     useProjectCost(costRefreshKey);
+
+  // Prefer live context from the active tab's stream; falls back to null until
+  // the first cost/context sample arrives.
+  const activeContext = activeMeta?.contextUsage ?? null;
+
+  const handleCompactContext = useCallback(async () => {
+    if (!activeTabId || compactingContext) return;
+    setCompactingContext(true);
+    try {
+      await tabHandles.current.get(activeTabId)?.compact();
+    } finally {
+      setCompactingContext(false);
+    }
+  }, [activeTabId, compactingContext]);
 
   const tabDescriptors: ChatTabDescriptor[] = useMemo(
     () =>
@@ -486,6 +552,14 @@ export default function ChatPage() {
         </p>
         <div className="flex items-center gap-2">
           <ResourceMonitor />
+          <SessionContextPill
+            context={activeContext}
+            compacting={compactingContext}
+            compactDisabled={Boolean(activeMeta?.isStreaming)}
+            onCompact={
+              activeSessionId ? () => void handleCompactContext() : undefined
+            }
+          />
           <SessionCostPill
             summary={costSummary}
             projectSummary={projectCost}

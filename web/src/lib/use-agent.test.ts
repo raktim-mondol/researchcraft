@@ -37,6 +37,10 @@ describe("buildRunBody", () => {
       message: "hi",
       computeTarget: "h100",
     });
+    expect(buildRunBody({ message: "hi", computeTarget: "runpod:rtx4090" })).toEqual({
+      message: "hi",
+      computeTarget: "runpod:rtx4090",
+    });
     expect(buildRunBody({ message: "hi", computeTarget: "local" })).toEqual({ message: "hi" });
   });
 

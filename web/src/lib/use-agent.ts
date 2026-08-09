@@ -5,7 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, onProjectChange } from "@/lib/projects";
 
 import type { PromptImage } from "./image-attachments";
+import { parseContextUsage, type ContextUsage } from "./context-usage";
 import { parseNotebookFrame, mergeNotebookEntries, type NotebookEntry } from "./notebook";
+
+export type { ContextUsage } from "./context-usage";
 
 // Keep the full tool-call trace per message: scientists rely on it to see and
 // reproduce what the agent ran, and the session export reads it too.
@@ -84,6 +87,8 @@ export interface AgentFrame {
   result?: string;
   runCost?: number;
   runTokens?: number;
+  /** Context meter payload on terminal `cost` frames. */
+  context?: unknown;
   role?: string;
   content?: string;
   steering?: unknown;
@@ -191,6 +196,9 @@ export interface TranscriptResult {
  * `messages` reference when nothing changed so callers can skip re-renders.
  * A user message_start after the initial prompt echo is a delivered steering
  * message: it closes the current assistant bubble and opens a new one.
+ *
+ * Text/thinking updates patch only the live assistant bubble (O(1) copy of
+ * the array tail) so long histories stay cheap under high frame rates.
  */
 export function applyFrameToTranscript(
   messages: ChatMessage[],
@@ -221,15 +229,24 @@ export function applyFrameToTranscript(
       steering: null,
     };
   }
-  let changed = false;
-  const next = messages.map((m) => {
-    if (m.id !== state.assistantId) return m;
-    const applied = applyFrameToMessage(m, frame, now);
-    if (applied !== m) changed = true;
-    return applied;
-  });
-  return { messages: changed ? next : messages, state, steering: null };
+  // Patch only the live assistant bubble — avoid mapping the full history.
+  let idx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].id === state.assistantId) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1) return { messages, state, steering: null };
+  const applied = applyFrameToMessage(messages[idx], frame, now);
+  if (applied === messages[idx]) return { messages, state, steering: null };
+  const next = messages.slice();
+  next[idx] = applied;
+  return { messages: next, state, steering: null };
 }
+
+/** Frame types that can be coalesced into one React commit (~1 rAF). */
+const BATCHABLE_FRAME_TYPES = new Set(["text_delta", "thinking_delta"]);
 
 /** One transcript entry from GET /sessions/:id/history. */
 interface HistoryItem {
@@ -269,6 +286,7 @@ export function useAgent() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notebookEntries, setNotebookEntries] = useState<NotebookEntry[]>([]);
   const [subagentCompletions, setSubagentCompletions] = useState(0);
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [status, setStatus] = useState<Status>("ready");
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
   const sessionIdRef = useRef<string | null>(null);
@@ -278,8 +296,36 @@ export function useAgent() {
   // plain-value setMessages(transcript) writes would clobber it.
   const sendClaimRef = useRef(false);
   const messageCounter = useRef(0);
+  // Coalesce high-frequency text/thinking deltas into one React commit per
+  // animation frame so Streamdown/list work does not run on every SSE token.
+  const pendingTranscriptRef = useRef<ChatMessage[] | null>(null);
+  const rafFlushRef = useRef<number | null>(null);
 
   const nextId = () => String(++messageCounter.current);
+
+  const cancelPendingFlush = useCallback(() => {
+    if (rafFlushRef.current != null) {
+      cancelAnimationFrame(rafFlushRef.current);
+      rafFlushRef.current = null;
+    }
+    pendingTranscriptRef.current = null;
+  }, []);
+
+  const flushMessagesNow = useCallback((next: ChatMessage[]) => {
+    cancelPendingFlush();
+    setMessages(next);
+  }, [cancelPendingFlush]);
+
+  const scheduleMessagesFlush = useCallback((next: ChatMessage[]) => {
+    pendingTranscriptRef.current = next;
+    if (rafFlushRef.current != null) return;
+    rafFlushRef.current = requestAnimationFrame(() => {
+      rafFlushRef.current = null;
+      const pending = pendingTranscriptRef.current;
+      pendingTranscriptRef.current = null;
+      if (pending) setMessages(pending);
+    });
+  }, []);
 
   /**
    * Hydrate this (untouched) tab from a stored session's transcript, and bind
@@ -292,11 +338,12 @@ export function useAgent() {
     // one where a send has already claimed the transcript.
     if (sessionIdRef.current || sendClaimRef.current) return false;
     try {
-      const res = await apiFetch(
-        `/sessions/${encodeURIComponent(sessionId)}/history`,
-      );
-      if (!res.ok) return false;
-      const data = (await res.json()) as { messages?: HistoryItem[] };
+      const [histRes, nbRes] = await Promise.all([
+        apiFetch(`/sessions/${encodeURIComponent(sessionId)}/history`),
+        apiFetch(`/sessions/${encodeURIComponent(sessionId)}/notebook`),
+      ]);
+      if (!histRes.ok) return false;
+      const data = (await histRes.json()) as { messages?: HistoryItem[] };
       // Re-check after the awaits: a message sent while the history fetch was
       // in flight claims the tab (and will bind a fresh session), which must
       // win over hydration.
@@ -335,6 +382,25 @@ export function useAgent() {
       }
       sessionIdRef.current = sessionId;
       setMessages(restored);
+      if (nbRes.ok) {
+        try {
+          const nb = (await nbRes.json()) as { entries?: NotebookEntry[] };
+          if (Array.isArray(nb.entries)) setNotebookEntries(nb.entries);
+        } catch {
+          /* notebook restore is best-effort */
+        }
+      }
+      // Best-effort context meter for restored sessions.
+      try {
+        const ctxRes = await apiFetch(
+          `/sessions/${encodeURIComponent(sessionId)}/context`,
+        );
+        if (ctxRes.ok) {
+          setContextUsage(parseContextUsage(await ctxRes.json()));
+        }
+      } catch {
+        /* ignore */
+      }
       setStatus("ready");
       return true;
     } catch {
@@ -382,8 +448,9 @@ export function useAgent() {
     // The optional third arg (expert model / attachments / skills / databases)
     // is accepted for call-site compatibility but no longer used: the Pi
     // backend runs a single flat agent. Skill/database hints are still injected
-    // into the prompt text by the caller. `computeTarget` is the selected Modal
-    // instance id, forwarded so the modal_run tool defaults to it. `thinkingLevel`
+    // into the prompt text by the caller. `computeTarget` is the selected remote
+    // instance wire id (Modal bare id or `runpod:<id>`), forwarded so modal_run /
+    // runpod_run default to it. `thinkingLevel`
     // is the extended-thinking level ("off" / "minimal" / "low" / "medium" / "high" / "xhigh").
     // `images` are inline attachments that ride the user message as image blocks.
     async (
@@ -478,11 +545,28 @@ export function useAgent() {
               if (frame.type === "tool_end" && frame.toolName === "subagent") {
                 setSubagentCompletions((n) => n + 1);
               }
+              if (frame.type === "cost") {
+                const ctx = parseContextUsage(frame.context);
+                if (ctx) setContextUsage(ctx);
+              }
               const r = applyFrameToTranscript(transcript, runState, frame, nextId);
+              // Skip React work when the frame did not change the transcript
+              // (e.g. lifecycle noise already dropped by applyFrameToMessage).
+              if (r.messages === transcript && !r.steering) {
+                runState = r.state;
+                continue;
+              }
               transcript = r.messages;
               runState = r.state;
               if (r.steering) setPendingSteers(r.steering);
-              setMessages(transcript);
+              // High-frequency token/thinking deltas: coalesce to ~1 paint/frame.
+              // Tool / cost / error / steering frames flush immediately so the
+              // UI stays interactive (interview forms, tool cards, etc.).
+              if (BATCHABLE_FRAME_TYPES.has(frame.type)) {
+                scheduleMessagesFlush(transcript);
+              } else {
+                flushMessagesNow(transcript);
+              }
             } catch {
               /* skip malformed line */
             }
@@ -499,7 +583,7 @@ export function useAgent() {
               }
             : m,
         );
-        setMessages(transcript);
+        flushMessagesNow(transcript);
         setPendingSteers([]);
         setStatus("ready");
       } catch (err: unknown) {
@@ -520,7 +604,7 @@ export function useAgent() {
             activities,
           };
         });
-        setMessages(transcript);
+        flushMessagesNow(transcript);
         setPendingSteers([]);
         setStatus(aborted ? "ready" : "error");
       } finally {
@@ -530,11 +614,12 @@ export function useAgent() {
 
       return userMsgId;
     },
-    [status, ensureSession],
+    [status, ensureSession, scheduleMessagesFlush, flushMessagesNow],
   );
 
   const stop = useCallback(async (): Promise<string[]> => {
     abortRef.current?.abort();
+    cancelPendingFlush();
     const id = sessionIdRef.current;
     let restored: string[] = [];
     if (id) {
@@ -551,17 +636,22 @@ export function useAgent() {
     setPendingSteers([]);
     setStatus("ready");
     return restored;
-  }, []);
+  }, [cancelPendingFlush]);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
+    cancelPendingFlush();
     setMessages([]);
     setNotebookEntries([]);
     setSubagentCompletions(0);
+    setContextUsage(null);
     setPendingSteers([]);
     setStatus("ready");
     sessionIdRef.current = null;
-  }, []);
+  }, [cancelPendingFlush]);
+
+  // Drop any scheduled paint if the hook unmounts mid-stream.
+  useEffect(() => () => cancelPendingFlush(), [cancelPendingFlush]);
 
   useEffect(() => onProjectChange(() => reset()), [reset]);
 
@@ -579,5 +669,7 @@ export function useAgent() {
     pendingSteers,
     notebookEntries,
     subagentCompletions,
+    contextUsage,
+    setContextUsage,
   };
 }

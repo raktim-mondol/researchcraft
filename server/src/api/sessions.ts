@@ -19,6 +19,7 @@ import {
   type InterviewAnswer,
 } from "../agent/interview.ts";
 import { setSessionComputeTarget } from "../agent/modal-tool.ts";
+import { setSessionRunpodComputeTarget } from "../agent/runpod-tool.ts";
 import { llmConfigured, resolveModel } from "../agent/models.ts";
 import { parseRunImages } from "../agent/prompt-images.ts";
 import { readNotebookEntries } from "../agent/notebook-store.ts";
@@ -67,13 +68,38 @@ function snapshot(session: { getSessionStats(): { cost: number; tokens: { input:
   };
 }
 
+/** Wire shape for Pi's getContextUsage() — null tokens means "unknown until next turn". */
+export interface ContextUsageDto {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
+function contextUsageOf(session: {
+  getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+}): ContextUsageDto | null {
+  const u = session.getContextUsage();
+  if (!u || !(u.contextWindow > 0)) return null;
+  return {
+    tokens: typeof u.tokens === "number" ? u.tokens : null,
+    contextWindow: u.contextWindow,
+    percent: typeof u.percent === "number" ? u.percent : null,
+  };
+}
+
 interface RunBody {
   message?: string;
   model?: string;
   thinkingLevel?: string;
   /** Full OpenRouter Fusion request body for a "fusion/<id>" model selection. */
   fusionConfig?: Record<string, unknown>;
-  /** Default Modal compute instance id for `modal_run` this run ("local" / unset = none). */
+  /**
+   * Default remote compute target for this run.
+   * - unset / "local" → no remote default
+   * - "h100", "t4", … → Modal instance (backward-compatible bare ids)
+   * - "modal:h100" → Modal instance (explicit)
+   * - "runpod:rtx4090" → Runpod instance
+   */
   computeTarget?: string;
   /** Inline image attachments (base64 + mime type); ride the user message as image blocks. */
   images?: unknown;
@@ -128,6 +154,72 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       return { detail: (err as Error).message };
     }
   });
+
+  // Current in-context token usage vs model context window (for the UI meter).
+  app.get<{ Params: { id: string } }>("/sessions/:id/context", async (req, reply) => {
+    try {
+      const session = await getSession(currentProjectId(), activePaths(), req.params.id);
+      if (!session) {
+        reply.code(404);
+        return { detail: "No such session" };
+      }
+      const context = contextUsageOf(session);
+      if (!context) {
+        // Model not set yet or no window advertised — still return a shape.
+        const window =
+          session.model && typeof (session.model as { contextWindow?: number }).contextWindow === "number"
+            ? (session.model as { contextWindow: number }).contextWindow
+            : 0;
+        return {
+          tokens: null,
+          contextWindow: window,
+          percent: null,
+        } satisfies ContextUsageDto;
+      }
+      return context;
+    } catch (err) {
+      reply.code(400);
+      return { detail: (err as Error).message };
+    }
+  });
+
+  // Manually compact the session (summarize older turns to free context).
+  // Blocked while a run is in flight — compact aborts the agent first, but
+  // racing an open SSE stream is more confusing than a clean 409.
+  app.post<{ Params: { id: string }; Body: { instructions?: string } }>(
+    "/sessions/:id/compact",
+    async (req, reply) => {
+      const projectId = currentProjectId();
+      const session = await getSession(projectId, activePaths(), req.params.id);
+      if (!session) {
+        reply.code(404);
+        return { detail: "No such session" };
+      }
+      const runKey = `${projectId}:${req.params.id}`;
+      if (activeRuns.has(runKey) || session.isStreaming) {
+        reply.code(409);
+        return {
+          detail: "Cannot compact while a run is in progress. Stop the run first.",
+          reason: "busy",
+        };
+      }
+      try {
+        const instructions =
+          typeof req.body?.instructions === "string" && req.body.instructions.trim()
+            ? req.body.instructions.trim()
+            : undefined;
+        const result = await session.compact(instructions);
+        return {
+          ok: true,
+          tokensBefore: result.tokensBefore,
+          context: contextUsageOf(session),
+        };
+      } catch (err) {
+        reply.code(400);
+        return { detail: (err as Error).message };
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/sessions/:id/notebook", async (req, reply) => {
     try {
@@ -421,9 +513,27 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       // means "not a fusion run, nothing to restore".
       let savedToolNames: string[] | null = null;
       try {
-        // Stash this run's selected compute instance so the modal_run tool uses
-        // it as the default when the agent doesn't name one ("local"/unset clears it).
-        setSessionComputeTarget(session.sessionId, body.computeTarget ?? null);
+        // Stash this run's selected compute instance so modal_run / runpod_run
+        // use it as the default when the agent doesn't name one.
+        // Wire format: "local"/unset clears both; "runpod:<id>" routes to Runpod;
+        // bare Modal ids or "modal:<id>" route to Modal.
+        {
+          const raw = body.computeTarget ?? null;
+          if (!raw || raw === "local") {
+            setSessionComputeTarget(session.sessionId, null);
+            setSessionRunpodComputeTarget(session.sessionId, null);
+          } else if (raw.startsWith("runpod:")) {
+            setSessionComputeTarget(session.sessionId, null);
+            setSessionRunpodComputeTarget(session.sessionId, raw);
+          } else if (raw.startsWith("modal:")) {
+            setSessionComputeTarget(session.sessionId, raw.slice("modal:".length));
+            setSessionRunpodComputeTarget(session.sessionId, null);
+          } else {
+            // Backward-compat bare Modal instance id (e.g. "h100").
+            setSessionComputeTarget(session.sessionId, raw);
+            setSessionRunpodComputeTarget(session.sessionId, null);
+          }
+        }
         const isFusion = Boolean(body.model && body.model.startsWith("fusion/"));
         if (isFusion) {
           // Fusion is load-bearing for the spend cap: the cost-bearing Model
@@ -572,6 +682,9 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
               tokens: stats.tokens,
               runCost: run.costUsd,
               runTokens: run.total,
+              // In-context meter for the UI (used vs window); null tokens right
+              // after a compact until the next assistant turn reports usage.
+              context: contextUsageOf(session) ?? undefined,
             });
             write({ type: "done" });
           } catch (err) {

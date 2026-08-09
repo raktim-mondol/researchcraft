@@ -118,8 +118,8 @@ function HistoryMenu({
           <>
             <b>Chat history</b>
             <br />
-            Reopen a previous chat from this project — the full transcript is
-            restored and you can continue the conversation.
+            Reopen any previous chat from this project. Your last open chats
+            also restore automatically after restart — pick older ones here.
           </>
         }
       >

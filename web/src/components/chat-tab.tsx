@@ -30,7 +30,7 @@ import {
   DEFAULT_MODEL,
   type Model,
 } from "@/components/model-selector";
-import { ComputeSelector, type ModalInstance } from "@/components/compute-selector";
+import { ComputeSelector, type ComputeInstance } from "@/components/compute-selector";
 import {
   DEFAULT_THINKING_LEVEL,
   ThinkingSelector,
@@ -56,10 +56,18 @@ import {
 import { suggestSkillsForFiles } from "@/lib/skill-suggestions";
 import { useAgent, type ActivityItem, type ChatMessage } from "@/lib/use-agent";
 import type { NotebookEntry } from "@/lib/notebook";
+import {
+  contextPressure,
+  type ContextUsage,
+} from "@/lib/context-usage";
+import { compactSession } from "@/lib/use-session-context";
 import { routeSubmit, steerNotStreamingFallback, type SendIntent } from "@/lib/chat-routing";
+import { ContextCompactBanner } from "@/components/context-compact-banner";
+import { toast } from "sonner";
 import { SpeechInput } from "@/components/ai-elements/speech-input";
 import {
   CheckIcon,
+  CircleHelpIcon,
   CopyIcon,
   DatabaseIcon,
   ImageIcon,
@@ -73,6 +81,7 @@ import { cn, formatUsd } from "@/lib/utils";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -85,6 +94,13 @@ import {
 
 const MAX_QUEUE = 5;
 
+/**
+ * How many of the newest transcript messages stay mounted. Older ones are
+ * behind a "Show earlier" control so long sessions do not keep a huge DOM.
+ * Expand steps add this many more messages each click.
+ */
+const MESSAGE_WINDOW = 40;
+
 interface QueuedMessage {
   id: string;
   rawText: string;
@@ -95,7 +111,7 @@ interface QueuedMessage {
   files: string[];
   /** Inline image attachments captured at enqueue time. */
   images: PromptImage[];
-  /** Selected Modal compute instance id at enqueue time (null = local). */
+  /** Selected compute target wire id at enqueue time (null = local). */
   computeTarget: string | null;
   /** Thinking level at enqueue time (null = model doesn't support one). */
   thinkingLevel: ThinkingLevel | null;
@@ -463,6 +479,7 @@ function ChatInput({
   onThinkingLevelChange,
   thinkingDisabled,
   modalConfigured,
+  runpodConfigured,
   onUploadFiles,
   allSkills,
   selectedSkills,
@@ -490,12 +507,13 @@ function ChatInput({
   onDbsChange: (dbs: Database[]) => void;
   selectedModel: Model;
   onModelChange: (model: Model) => void;
-  selectedComputeTarget: ModalInstance | null;
-  onComputeTargetChange: (instance: ModalInstance | null) => void;
+  selectedComputeTarget: ComputeInstance | null;
+  onComputeTargetChange: (instance: ComputeInstance | null) => void;
   thinkingLevel: ThinkingLevel;
   onThinkingLevelChange: (level: ThinkingLevel) => void;
   thinkingDisabled: boolean;
   modalConfigured: boolean;
+  runpodConfigured: boolean;
   onUploadFiles: (files: FileList | File[], paths?: string[]) => Promise<string[]>;
   allSkills: Skill[];
   selectedSkills: Skill[];
@@ -813,11 +831,47 @@ function ChatInput({
                 onChange={onThinkingLevelChange}
                 disabled={thinkingDisabled}
               />
-              <ComputeSelector
-                selected={selectedComputeTarget}
-                onChange={onComputeTargetChange}
-                modalConfigured={modalConfigured}
-              />
+              <div className="flex min-w-0 items-center gap-0.5">
+                <ComputeSelector
+                  selected={selectedComputeTarget}
+                  onChange={onComputeTargetChange}
+                  modalConfigured={modalConfigured}
+                  runpodConfigured={runpodConfigured}
+                />
+                <InfoTooltip
+                  content={
+                    <>
+                      <b>Remote compute</b>
+                      <br />
+                      Pick <b>Local</b> for the built-in sandbox, or a{" "}
+                      <b>Modal</b> / <b>Runpod</b> GPU so the agent can offload
+                      heavy jobs with{" "}
+                      <code className="rounded bg-muted px-1 font-mono text-[10px]">
+                        modal_run
+                      </code>{" "}
+                      /{" "}
+                      <code className="rounded bg-muted px-1 font-mono text-[10px]">
+                        runpod_run
+                      </code>
+                      . Upload data under{" "}
+                      <code className="rounded bg-muted px-1 font-mono text-[10px]">
+                        user_data/
+                      </code>
+                      ; results copy back into the project. Add keys in Settings
+                      → API keys, then open a new chat tab. Remote time is billed
+                      on your cloud account and counted in the project budget.
+                    </>
+                  }
+                >
+                  <button
+                    type="button"
+                    className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    aria-label="About remote compute"
+                  >
+                    <CircleHelpIcon className="size-3.5" />
+                  </button>
+                </InfoTooltip>
+              </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <InfoTooltip
@@ -890,7 +944,7 @@ function ChatInput({
   );
 }
 
-function AssistantMessageBody({
+const AssistantMessageBody = memo(function AssistantMessageBody({
   message,
   isStreaming,
   isLast,
@@ -940,12 +994,17 @@ function AssistantMessageBody({
   }
   flushChunk();
 
+  // Live bubble: skip Streamdown plugins until the turn settles.
+  const streamMarkdown = isStreaming && isLast;
+
   return (
     <>
       {hasReasoning && <ReasoningBlock reasoning={message.reasoning ?? ""} />}
       {activityBlocks}
       {message.content ? (
-        <MessageResponse>{message.content}</MessageResponse>
+        <MessageResponse isStreaming={streamMarkdown}>
+          {message.content}
+        </MessageResponse>
       ) : isStreaming && !hasAnything ? (
         <Shimmer className="text-sm" duration={1.5}>
           Thinking...
@@ -963,7 +1022,103 @@ function AssistantMessageBody({
       )}
     </>
   );
-}
+});
+
+/** One transcript row — memoized so settled history skips re-render work. */
+const ChatMessageRow = memo(function ChatMessageRow({
+  message,
+  isStreaming,
+  isLast,
+  sessionId,
+  onViewInNotebook,
+  copiedId,
+  onCopy,
+}: {
+  message: ChatMessage;
+  isStreaming: boolean;
+  isLast: boolean;
+  sessionId: string | null;
+  onViewInNotebook?: (entryId: string) => void;
+  copiedId: string | null;
+  onCopy: (id: string, content: string) => void;
+}) {
+  return (
+    <Message
+      from={message.role}
+      // content-visibility lets the browser skip layout/paint for off-screen
+      // bubbles without a full virtualizer rewrite of StickToBottom.
+      className="[content-visibility:auto] [contain-intrinsic-size:auto_120px]"
+    >
+      <MessageContent>
+        {message.role === "assistant" ? (
+          <AssistantMessageBody
+            message={message}
+            isStreaming={isStreaming}
+            isLast={isLast}
+            sessionId={sessionId}
+            onViewInNotebook={onViewInNotebook}
+          />
+        ) : (
+          <>
+            {message.images && message.images.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {message.images.map((img, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={i}
+                    src={`data:${img.mimeType};base64,${img.data}`}
+                    alt={`Attached image ${i + 1}`}
+                    className="max-h-56 max-w-64 rounded-lg border object-contain"
+                  />
+                ))}
+              </div>
+            )}
+            <MessageResponse>{message.content}</MessageResponse>
+          </>
+        )}
+        {message.role === "assistant" && message.modelVersion && (
+          <span className="text-xs text-muted-foreground mt-1">
+            {message.modelVersion}
+          </span>
+        )}
+      </MessageContent>
+      {message.role === "assistant" && message.content && (
+        <MessageToolbar>
+          <MessageActions>
+            <MessageAction
+              tooltip="Copy"
+              onClick={() => onCopy(message.id, message.content)}
+            >
+              {copiedId === message.id ? (
+                <CheckIcon className="size-4" />
+              ) : (
+                <CopyIcon className="size-4" />
+              )}
+            </MessageAction>
+          </MessageActions>
+          {typeof message.runCostUsd === "number" && message.runCostUsd > 0 && (
+            <InfoTooltip
+              content={
+                <>
+                  <b>Cost of this reply</b>
+                  <br />
+                  {formatUsd(message.runCostUsd)}
+                  {typeof message.runTokens === "number" && message.runTokens > 0
+                    ? ` · ${message.runTokens.toLocaleString()} tokens`
+                    : ""}
+                </>
+              }
+            >
+              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                {formatUsd(message.runCostUsd)}
+              </span>
+            </InfoTooltip>
+          )}
+        </MessageToolbar>
+      )}
+    </Message>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // ChatTab — full chat surface (Conversation + ChatInput + queue) for one tab.
@@ -975,10 +1130,12 @@ export interface ChatTabMeta {
   sessionId: string | null;
   status: "ready" | "submitted" | "streaming" | "error";
   isStreaming: boolean;
-  messages: ChatMessage[];
+  /** Deliberately no full `messages` array — lifting it re-rendered the page every token. */
   userMessageCount: number;
   notebookEntries: NotebookEntry[];
   subagentCompletions: number;
+  /** Live context meter (used vs model window); null until first cost/context sample. */
+  contextUsage: ContextUsage | null;
 }
 
 export interface ChatTabHandle {
@@ -1009,6 +1166,8 @@ export interface ChatTabHandle {
    * false when the chip isn't in this tab's transcript.
    */
   scrollToToolCall: (toolCallId: string) => boolean;
+  /** Summarize older turns to free context. Returns false if busy/failed. */
+  compact: () => Promise<boolean>;
 }
 
 export interface ChatTabProps {
@@ -1052,10 +1211,36 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
   },
   ref,
 ) {
-  const { messages, status, send, stop, steer, pendingSteers, getSessionId, loadSession, notebookEntries, subagentCompletions } = useAgent();
+  const {
+    messages,
+    status,
+    send,
+    stop,
+    steer,
+    pendingSteers,
+    getSessionId,
+    loadSession,
+    notebookEntries,
+    subagentCompletions,
+    contextUsage,
+    setContextUsage,
+  } = useAgent();
   const isStreaming = status === "streaming" || status === "submitted";
   // Scopes the deep-link querySelector to THIS tab's transcript.
   const rootRef = useRef<HTMLDivElement>(null);
+  // Imperative handles close over a stable callback; keep a live pointer so
+  // scrollToToolCall can expand the windowed transcript without stale data.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const [compacting, setCompacting] = useState(false);
+  // Dismiss the compact suggestion until pressure rises again (or context drops).
+  const [dismissedPressure, setDismissedPressure] = useState<"warn" | "critical" | null>(
+    null,
+  );
+  const pressure = contextPressure(contextUsage);
+  useEffect(() => {
+    if (pressure === "ok" || pressure === "unknown") setDismissedPressure(null);
+  }, [pressure]);
 
   // Reopened tab: hydrate the transcript from the stored session before any
   // sends. loadSession refuses to run once the tab is bound to a session, so
@@ -1068,10 +1253,11 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
 
   // Per-tab settings
   const [selectedModel, setSelectedModel] = useState<Model>(DEFAULT_MODEL);
-  const [selectedComputeTarget, setSelectedComputeTarget] = useState<ModalInstance | null>(null);
+  const [selectedComputeTarget, setSelectedComputeTarget] = useState<ComputeInstance | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(DEFAULT_THINKING_LEVEL);
   const thinkingDisabled = thinkingUnsupported(selectedModel);
   const [modalConfigured, setModalConfigured] = useState(false);
+  const [runpodConfigured, setRunpodConfigured] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [selectedDbs, setSelectedDbs] = useState<Database[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
@@ -1092,8 +1278,8 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Modal compute is gated on both token halves being set; the ComputeSelector
-  // shows a "keys not configured" notice and disables GPU rows until then.
+  // Remote compute is gated on BYOK keys; the ComputeSelector shows a
+  // "keys not configured" notice and disables provider rows until then.
   useEffect(() => {
     let cancelled = false;
     apiFetch("/credentials")
@@ -1101,6 +1287,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
       .then((d) => {
         if (!cancelled && d) {
           setModalConfigured(Boolean(d.modalTokenId?.set && d.modalTokenSecret?.set));
+          setRunpodConfigured(Boolean(d.runpodApiKey?.set));
         }
       })
       .catch(() => {});
@@ -1164,7 +1351,8 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
   }, [status, messageQueue, send]);
 
   // Bubble meta up to parent so the page can drive the cost pill and tab
-  // strip badges from the active tab.
+  // strip badges from the active tab. Do NOT lift the full messages array —
+  // that forced a page-wide re-render on every streamed token.
   const sessionId = getSessionId();
   const userMessageCount = useMemo(
     () => messages.filter((m) => m.role === "user").length,
@@ -1175,22 +1363,58 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
       sessionId,
       status,
       isStreaming,
-      messages,
       userMessageCount,
       notebookEntries,
       subagentCompletions,
+      contextUsage,
     });
   }, [
     tabId,
     sessionId,
     status,
     isStreaming,
-    messages,
     userMessageCount,
     notebookEntries,
     subagentCompletions,
+    contextUsage,
     onMetaChange,
   ]);
+
+  const runCompact = useCallback(async (): Promise<boolean> => {
+    const id = getSessionId();
+    if (!id || isStreaming || compacting) return false;
+    setCompacting(true);
+    try {
+      const result = await compactSession(id);
+      if (!result.ok) {
+        toast.error(result.detail || "Could not compact context");
+        return false;
+      }
+      setContextUsage(result.context);
+      setDismissedPressure(null);
+      toast.success("Context compacted — older turns were summarized");
+      onTurnComplete();
+      return true;
+    } finally {
+      setCompacting(false);
+    }
+  }, [getSessionId, isStreaming, compacting, setContextUsage, onTurnComplete]);
+
+  // Windowed transcript: keep only the newest N messages mounted; user can
+  // expand to reveal older history. Slice from the end so the live tail is
+  // always included as new messages arrive mid-stream.
+  const [visibleCount, setVisibleCount] = useState(MESSAGE_WINDOW);
+  useEffect(() => {
+    if (messages.length === 0) setVisibleCount(MESSAGE_WINDOW);
+  }, [messages.length]);
+  const hiddenCount = Math.max(0, messages.length - visibleCount);
+  const visibleMessages = useMemo(
+    () => (hiddenCount > 0 ? messages.slice(hiddenCount) : messages),
+    [messages, hiddenCount],
+  );
+  const showEarlier = useCallback(() => {
+    setVisibleCount((n) => n + MESSAGE_WINDOW);
+  }, []);
 
   const enqueue = useCallback(
     (trimmed: string, images: PromptImage[] = []) => {
@@ -1210,7 +1434,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           skills: [...selectedSkills],
           files: [...attachedFiles],
           images,
-          computeTarget: selectedComputeTarget?.id ?? null,
+          computeTarget: selectedComputeTarget?.wireId ?? null,
           thinkingLevel: thinkingDisabled ? null : thinkingLevel,
           timestamp: Date.now(),
         },
@@ -1234,7 +1458,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             databases: selectedDbs.map((db) => db.name),
           },
           selectedModel.fusionConfig,
-          selectedComputeTarget?.id,
+          selectedComputeTarget?.wireId ?? undefined,
           thinkingDisabled ? undefined : thinkingLevel,
           images.length > 0 ? images : undefined,
         );
@@ -1290,14 +1514,33 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
     ref,
     () => ({
       stop,
+      compact: runCompact,
       scrollToToolCall: (toolCallId: string) => {
-        const el = rootRef.current?.querySelector(
-          `[data-tool-call-id="${CSS.escape(toolCallId)}"]`,
+        const flash = (el: Element) => {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+          el.classList.add("rc-flash");
+          setTimeout(() => el.classList.remove("rc-flash"), 1800);
+        };
+        const find = () =>
+          rootRef.current?.querySelector(
+            `[data-tool-call-id="${CSS.escape(toolCallId)}"]`,
+          ) ?? null;
+        const el = find();
+        if (el) {
+          flash(el);
+          return true;
+        }
+        const known = messagesRef.current.some((m) =>
+          m.activities?.some((a) => a.id === toolCallId),
         );
-        if (!el) return false;
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
-        el.classList.add("rc-flash");
-        setTimeout(() => el.classList.remove("rc-flash"), 1800);
+        if (!known) return false;
+        // Windowed transcript may have unmounted older tool chips — expand
+        // to the full history and retry after paint.
+        setVisibleCount(Number.MAX_SAFE_INTEGER);
+        requestAnimationFrame(() => {
+          const retry = find();
+          if (retry) flash(retry);
+        });
         return true;
       },
       sendQuick: async (prompt: string) => {
@@ -1307,7 +1550,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           selectedModel.id,
           undefined,
           selectedModel.fusionConfig,
-          selectedComputeTarget?.id,
+          selectedComputeTarget?.wireId ?? undefined,
           thinkingDisabled ? undefined : thinkingLevel,
         );
       },
@@ -1328,7 +1571,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             databases: [],
           },
           model.fusionConfig,
-          selectedComputeTarget?.id,
+          selectedComputeTarget?.wireId ?? undefined,
           thinkingUnsupported(model) ? undefined : thinkingLevel,
         );
       },
@@ -1336,19 +1579,19 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
     [
       send,
       stop,
+      runCompact,
       budgetState,
       selectedModel.id,
       selectedModel.fusionConfig,
-      selectedComputeTarget?.id,
+      selectedComputeTarget?.wireId,
       thinkingDisabled,
       thinkingLevel,
     ],
   );
 
-  // Background tabs stay mounted (so streaming + queue auto-send continue,
-  // and the textarea / scroll position survive a tab switch) but use
-  // `display: none` to drop out of the layout. React keeps the component
-  // instance alive, so all hooks above this branch keep running.
+  // Hooks (useAgent, queue auto-send, etc.) always stay mounted so background
+  // streams continue. The heavy transcript DOM is unmounted when the tab is
+  // inactive; composer stays mounted so draft text survives tab switches.
   return (
     <div
       ref={rootRef}
@@ -1357,93 +1600,73 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
         !isActive && "hidden",
       )}
     >
-      <Conversation className="flex-1">
-        <ConversationContent className="mx-auto w-full max-w-full px-4">
-          {messages.length === 0 ? (
-            <ConversationEmptyState
-              title="What can I help you with?"
-              description="I can research topics, write code, and analyze data."
-            />
-          ) : (
-            messages.map((message, i) => (
-              <Message from={message.role} key={message.id}>
-                <MessageContent>
-                  {message.role === "assistant" ? (
-                    <AssistantMessageBody
+      {isActive ? (
+        <Conversation className="flex-1">
+          <ConversationContent className="mx-auto w-full max-w-full px-4">
+            {messages.length === 0 ? (
+              <ConversationEmptyState
+                title="What can I help you with?"
+                description="I can research topics, write code, and analyze data."
+              />
+            ) : (
+              <>
+                {hiddenCount > 0 && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={showEarlier}
+                      className="rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      Show {Math.min(MESSAGE_WINDOW, hiddenCount)} earlier
+                      {hiddenCount > MESSAGE_WINDOW
+                        ? ` (${hiddenCount} hidden)`
+                        : ""}
+                    </button>
+                  </div>
+                )}
+                {visibleMessages.map((message, i) => {
+                  const absoluteIndex = hiddenCount + i;
+                  return (
+                    <ChatMessageRow
+                      key={message.id}
                       message={message}
                       isStreaming={isStreaming}
-                      isLast={i === messages.length - 1}
+                      isLast={absoluteIndex === messages.length - 1}
                       sessionId={sessionId}
                       onViewInNotebook={onViewInNotebook}
+                      copiedId={copiedId}
+                      onCopy={handleCopy}
                     />
-                  ) : (
-                    <>
-                      {message.images && message.images.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {message.images.map((img, i) => (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              key={i}
-                              src={`data:${img.mimeType};base64,${img.data}`}
-                              alt={`Attached image ${i + 1}`}
-                              className="max-h-56 max-w-64 rounded-lg border object-contain"
-                            />
-                          ))}
-                        </div>
-                      )}
-                      <MessageResponse>{message.content}</MessageResponse>
-                    </>
-                  )}
-                  {message.role === "assistant" && message.modelVersion && (
-                    <span className="text-xs text-muted-foreground mt-1">
-                      {message.modelVersion}
-                    </span>
-                  )}
-                </MessageContent>
-                {message.role === "assistant" && message.content && (
-                  <MessageToolbar>
-                    <MessageActions>
-                      <MessageAction
-                        tooltip="Copy"
-                        onClick={() => handleCopy(message.id, message.content)}
-                      >
-                        {copiedId === message.id ? (
-                          <CheckIcon className="size-4" />
-                        ) : (
-                          <CopyIcon className="size-4" />
-                        )}
-                      </MessageAction>
-                    </MessageActions>
-                    {typeof message.runCostUsd === "number" &&
-                      message.runCostUsd > 0 && (
-                        <InfoTooltip
-                          content={
-                            <>
-                              <b>Cost of this reply</b>
-                              <br />
-                              {formatUsd(message.runCostUsd)}
-                              {typeof message.runTokens === "number" &&
-                              message.runTokens > 0
-                                ? ` · ${message.runTokens.toLocaleString()} tokens`
-                                : ""}
-                            </>
-                          }
-                        >
-                          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                            {formatUsd(message.runCostUsd)}
-                          </span>
-                        </InfoTooltip>
-                      )}
-                  </MessageToolbar>
-                )}
-              </Message>
-            ))
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+                  );
+                })}
+              </>
+            )}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+      ) : (
+        // Placeholder keeps the column flex layout so the composer stays
+        // pinned to the bottom while the transcript is unmounted.
+        <div className="flex-1 min-h-0" aria-hidden />
+      )}
 
       <div className="px-4 pb-6 pt-2">
+        {(pressure === "warn" || pressure === "critical") &&
+          dismissedPressure !== pressure && (
+            <ContextCompactBanner
+              context={contextUsage}
+              compacting={compacting}
+              disabled={isStreaming}
+              onCompact={() => {
+                void runCompact();
+              }}
+              onDismiss={() => {
+                if (pressure === "warn" || pressure === "critical") {
+                  setDismissedPressure(pressure);
+                }
+              }}
+            />
+          )}
         <PromptInputProvider>
           <ChatInput
             isActiveTab={isActiveTab}
@@ -1469,6 +1692,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             onThinkingLevelChange={setThinkingLevel}
             thinkingDisabled={thinkingDisabled}
             modalConfigured={modalConfigured}
+            runpodConfigured={runpodConfigured}
             onUploadFiles={uploadFiles}
             allSkills={allSkills}
             selectedSkills={selectedSkills}

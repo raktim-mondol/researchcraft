@@ -195,7 +195,7 @@ export function SessionCostPill({
               <CostRow label="Subagents" costUsd={summary.subagentUsd} />
             )}
             {summary.computeUsd > 0 && (
-              <CostRow label="Compute (Modal)" costUsd={summary.computeUsd} />
+              <CostRow label="Compute (remote)" costUsd={summary.computeUsd} />
             )}
           </div>
         </div>

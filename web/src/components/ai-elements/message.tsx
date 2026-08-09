@@ -324,7 +324,14 @@ export const MessageBranchPage = ({
   );
 };
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown>;
+export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+  /**
+   * While true, render plain pre-wrapped text instead of Streamdown + Shiki /
+   * KaTeX / mermaid. Streaming re-parses the whole bubble on every chunk; the
+   * heavy path only runs once the bubble settles.
+   */
+  isStreaming?: boolean;
+};
 
 const math = createMathPlugin({ singleDollarTextMath: true });
 const streamdownPlugins = { cjk, code, math, mermaid };
@@ -410,21 +417,40 @@ function normalizeMarkdown(md: string): string {
 }
 
 export const MessageResponse = memo(
-  ({ className, children, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
-      components={streamdownComponents}
-      linkSafety={linkSafetyOff}
-      plugins={streamdownPlugins}
-      {...props}
-    >
-      {typeof children === "string" ? normalizeMarkdown(children) : children}
-    </Streamdown>
-  ),
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  ({ className, children, isStreaming = false, ...props }: MessageResponseProps) => {
+    // Cheap path while tokens are still arriving: no plugin pipeline, no
+    // full markdown AST. Settled bubbles use Streamdown for code/math/mermaid.
+    if (isStreaming && typeof children === "string") {
+      return (
+        <div
+          className={cn(
+            "size-full whitespace-pre-wrap break-words text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+            className
+          )}
+        >
+          {children}
+        </div>
+      );
+    }
+    return (
+      <Streamdown
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className
+        )}
+        components={streamdownComponents}
+        linkSafety={linkSafetyOff}
+        plugins={streamdownPlugins}
+        {...props}
+      >
+        {typeof children === "string" ? normalizeMarkdown(children) : children}
+      </Streamdown>
+    );
+  },
+  (prevProps, nextProps) =>
+    prevProps.children === nextProps.children &&
+    prevProps.isStreaming === nextProps.isStreaming &&
+    prevProps.className === nextProps.className
 );
 
 MessageResponse.displayName = "MessageResponse";

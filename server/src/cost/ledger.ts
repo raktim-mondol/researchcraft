@@ -163,17 +163,18 @@ export function recordSubagentRun(
 }
 
 /**
- * Ledger a Modal remote-compute run against its parent session. Modal compute
- * is billed on wall-time × the instance's hourly rate (the `modal_run` tool
- * computes `costUsd` from the instance catalog) and carries no model tokens, so
- * we record it as a `compute` row. It counts toward the project budget exactly
- * like agent/subagent spend.
+ * Ledger a remote-compute run (Modal / Runpod / …) against its parent session.
+ * Compute is billed on wall-time × the instance's hourly rate and carries no
+ * model tokens, so we record it as a `compute` row. It counts toward the
+ * project budget exactly like agent/subagent spend.
+ *
+ * Prefer the provider-specific wrappers below so ledger `model` tags stay consistent.
  */
-export function recordModalRun(
+export function recordComputeRun(
   projectId: string,
   sessionId: string,
   costUsd: number,
-  model = "modal",
+  model: string,
 ): CostEntry | null {
   if (!sessionId) return null;
   return recordRun({
@@ -184,6 +185,32 @@ export function recordModalRun(
     before: emptySnapshot(),
     after: { ...emptySnapshot(), costUsd },
   });
+}
+
+/**
+ * Ledger a Modal remote-compute run. Model tag defaults to `modal` and is
+ * usually set to `modal:<instanceId>` by the tool.
+ */
+export function recordModalRun(
+  projectId: string,
+  sessionId: string,
+  costUsd: number,
+  model = "modal",
+): CostEntry | null {
+  return recordComputeRun(projectId, sessionId, costUsd, model);
+}
+
+/**
+ * Ledger a Runpod remote-compute run. Model tag defaults to `runpod` and is
+ * usually set to `runpod:<instanceId>` by the tool.
+ */
+export function recordRunpodRun(
+  projectId: string,
+  sessionId: string,
+  costUsd: number,
+  model = "runpod",
+): CostEntry | null {
+  return recordComputeRun(projectId, sessionId, costUsd, model);
 }
 
 function readEntries(sessionId: string, projectId?: string): CostEntry[] {

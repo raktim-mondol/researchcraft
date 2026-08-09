@@ -16,6 +16,7 @@
  *   - Optional pi-web-access search keys (Exa, Perplexity, Gemini)
  *   - Parallel Search MCP + Firecrawl MCP API keys (higher rate limits)
  *   - Modal remote-compute token pair
+ *   - Runpod remote-compute API key
  *
  * Keys are stored exactly where the app already expects them (repo-root
  * `.env`, plaintext, on the user's own machine) — we are removing friction,
@@ -97,6 +98,8 @@ const MANAGED_KEYS: ManagedKey[] = [
   // be set for modalConfigured() to flip true and the modal_run tool to register.
   { id: "modalTokenId", bodyField: "modalTokenId", envVar: "MODAL_TOKEN_ID" },
   { id: "modalTokenSecret", bodyField: "modalTokenSecret", envVar: "MODAL_TOKEN_SECRET" },
+  // Runpod remote compute — single API key unlocks pods + the runpod_run tool.
+  { id: "runpodApiKey", bodyField: "runpodApiKey", envVar: "RUNPOD_API_KEY" },
 ];
 
 function readKey(spec: ManagedKey): string | null {

@@ -85,6 +85,19 @@ Do not invent citations; only cite papers/URLs returned by these tools.
   "the data I uploaded" / "my file", look there first.
 - **Save your own outputs** (plots, results, reports) into the sandbox working
   directory (the root) so they appear in the file panel.
+
+## Remote compute (GPU / heavy jobs)
+
+When the job needs a GPU or would thrash the local machine, offload with the
+remote tools (if available) rather than hammering the laptop:
+
+- **\`modal_run\`** — Modal sandbox (needs Modal token pair in Settings → API keys).
+- **\`runpod_run\`** — Ephemeral Runpod pod (needs \`RUNPOD_API_KEY\` in Settings).
+
+Both take sandbox-relative \`files_in\` / \`files_out\`; the local sandbox stays
+canonical. Prefer the provider matching the user's Compute chip selection.
+Read the \`remote-compute\` skill for when to use which tool, instance picks,
+and cost/teardown rules. Lead agent only — subagents do not get these tools.
 `;
 
 /** Write pyproject.toml + AGENTS.md into the sandbox if missing. Idempotent. */

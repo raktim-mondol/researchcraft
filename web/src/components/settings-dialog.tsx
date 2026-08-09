@@ -98,6 +98,14 @@ const KEY_DEFS: KeyDef[] = [
     keysUrl: "https://modal.com/settings/tokens",
     hint: "The secret half of your Modal token pair. Both must be set to run jobs on Modal.",
   },
+  {
+    id: "runpodApiKey",
+    bodyField: "runpodApiKey",
+    label: "Runpod API Key (optional)",
+    placeholder: "rpa_…",
+    keysUrl: "https://console.runpod.io/user/settings",
+    hint: "Enables remote GPU/CPU pods — the agent can offload jobs via runpod_run (datasets, training, inference). Billed on your Runpod account. After saving, open a new chat tab so the tool registers; pick a Runpod GPU in the Compute chip.",
+  },
 ];
 
 function KeyRow({
@@ -454,7 +462,7 @@ function ApiKeysPanel() {
           (saved to{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[11px]">.env</code>
           ) — nothing is sent to ResearchCraft servers. Configure your model
-          endpoint below; search and Modal keys are optional.
+          endpoint below; search, Modal, and Runpod keys are optional.
         </p>
       </div>
 

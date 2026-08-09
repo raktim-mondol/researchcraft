@@ -20,14 +20,16 @@ import {
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import type { ProjectPaths } from "../projects.ts";
-import { modalConfigured } from "../config.ts";
+import { modalConfigured, runpodConfigured } from "../config.ts";
 import { getMcpTools } from "./mcp.ts";
 import { ensureSearchMcpServers } from "./search-mcp.ts";
 import { defaultModel, setupAuth } from "./models.ts";
 import { seedAgentFiles } from "./agent-files.ts";
+import { seedBundledSkills } from "./skills.ts";
 import { makeInterviewTool } from "./interview.ts";
 import { makeNotebookTool } from "./notebook.ts";
 import { makeModalTool } from "./modal-tool.ts";
+import { makeRunpodTool } from "./runpod-tool.ts";
 import { makeSubagentLedgerExtension, subagentsExtensionPath } from "./subagent-bridge.ts";
 import { makeFusionRequestExtension } from "./fusion-bridge.ts";
 import { WEB_ACCESS_TOOLS, ensureWebAccess } from "./web-access-bridge.ts";
@@ -93,6 +95,9 @@ async function build(
   // Make the scientific agent roster visible to pi-subagents' project-agent
   // discovery (sandbox/.pi/agents/) before the session starts.
   seedAgentFiles(paths);
+  // First-party skills (remote-compute for Modal/Runpod, …) — write-if-missing
+  // so existing projects pick them up without re-cloning the scientific catalogue.
+  seedBundledSkills(paths);
   // Reference pi-web-access from sandbox/.pi/settings.json and pre-trust the
   // sandbox so both this session and pi-subagents' child `pi` processes load
   // the web tools (web-access-bridge.ts explains why children need this).
@@ -127,11 +132,14 @@ async function build(
   const interviewTool = makeInterviewTool(projectId, () => holder.session?.sessionId ?? "");
   // Non-blocking lab-notebook tool: logs the agent's own narrative entries.
   const notebookTool = makeNotebookTool(projectId, () => holder.session?.sessionId ?? "");
-  // Remote-compute tool, only when Modal BYOK creds are present. Built per
-  // session (same holder-based late-bound sessionId as the interview tool); a
-  // session created before keys are set picks it up on its next cold-open.
+  // Remote-compute tools, only when the matching BYOK creds are present. Built
+  // per session (same holder-based late-bound sessionId as the interview tool);
+  // a session created before keys are set picks them up on its next cold-open.
   const modalTool = modalConfigured()
     ? makeModalTool(projectId, () => holder.session?.sessionId ?? "")
+    : null;
+  const runpodTool = runpodConfigured()
+    ? makeRunpodTool(projectId, () => holder.session?.sessionId ?? "")
     : null;
   const { session } = await createAgentSession({
     cwd: paths.sandbox,
@@ -147,9 +155,16 @@ async function build(
       "notebook",
       ...WEB_ACCESS_TOOLS,
       ...(modalTool ? ["modal_run"] : []),
+      ...(runpodTool ? ["runpod_run"] : []),
       ...mcpTools.map((t) => t.name),
     ],
-    customTools: [interviewTool, notebookTool, ...(modalTool ? [modalTool] : []), ...mcpTools],
+    customTools: [
+      interviewTool,
+      notebookTool,
+      ...(modalTool ? [modalTool] : []),
+      ...(runpodTool ? [runpodTool] : []),
+      ...mcpTools,
+    ],
   });
   holder.session = session;
   return session;

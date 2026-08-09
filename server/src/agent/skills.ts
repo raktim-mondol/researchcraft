@@ -8,11 +8,17 @@
  *
  * Fast path: copy an existing sibling project's skills (local I/O). Slow path:
  * shallow-clone the repo once.
+ *
+ * ResearchCraft also ships a small set of **bundled** skills under
+ * `server/src/agent/bundled-skills/` (e.g. remote-compute for Modal/Runpod).
+ * Those are write-if-missing on every prep/session open so existing projects
+ * pick them up without re-cloning the scientific catalogue.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
 import { PROJECTS_ROOT } from "../config.ts";
 import type { ProjectPaths } from "../projects.ts";
@@ -21,6 +27,12 @@ import type { ToggleResult } from "./capability-state.ts";
 const SKILLS_REPO = process.env.KADY_SKILLS_REPO ?? "K-Dense-AI/scientific-agent-skills";
 const SKILLS_SUBPATH = "skills";
 const SKILLS_BRANCH = process.env.KADY_SKILLS_BRANCH ?? "main";
+
+/** Directory of first-party skills shipped with the ResearchCraft server. */
+export const BUNDLED_SKILLS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "bundled-skills",
+);
 
 function countSkillDirs(dir: string): number {
   try {
@@ -77,27 +89,54 @@ function cloneCatalogue(): { skillsDir: string; tmpRoot: string } | null {
 /**
  * Ensure a project's skills dir is populated. Returns the number of skills.
  * `allowRemote=false` skips the network clone (fast path only).
+ *
+ * Always ends by seeding ResearchCraft bundled skills (write-if-missing), even
+ * when the scientific catalogue was already present.
  */
 export function seedProjectSkills(paths: ProjectPaths, allowRemote = true): number {
   const dest = paths.skillsDir;
-  if (countSkillDirs(dest) > 0) return countSkillDirs(dest);
-
-  const sibling = findSiblingSkillsDir(paths.id);
-  if (sibling) {
-    copySkillDirs(sibling, dest);
-    if (countSkillDirs(dest) > 0) return countSkillDirs(dest);
-  }
-  if (allowRemote) {
-    const catalogue = cloneCatalogue();
-    if (catalogue) {
-      try {
-        copySkillDirs(catalogue.skillsDir, dest);
-      } finally {
-        fs.rmSync(catalogue.tmpRoot, { recursive: true, force: true });
+  if (countSkillDirs(dest) === 0) {
+    const sibling = findSiblingSkillsDir(paths.id);
+    if (sibling) {
+      copySkillDirs(sibling, dest);
+    }
+    if (countSkillDirs(dest) === 0 && allowRemote) {
+      const catalogue = cloneCatalogue();
+      if (catalogue) {
+        try {
+          copySkillDirs(catalogue.skillsDir, dest);
+        } finally {
+          fs.rmSync(catalogue.tmpRoot, { recursive: true, force: true });
+        }
       }
     }
   }
+  seedBundledSkills(paths);
   return countSkillDirs(dest);
+}
+
+/**
+ * Install first-party skills shipped with ResearchCraft (write-if-missing).
+ * Skips a skill if it already exists in skills/ OR skills-disabled/ so user
+ * disable/customize wins. Returns how many skills were newly written.
+ */
+export function seedBundledSkills(paths: ProjectPaths): number {
+  if (!fs.existsSync(BUNDLED_SKILLS_DIR)) return 0;
+  const dest = paths.skillsDir;
+  const disabled = skillsDisabledDir(paths);
+  fs.mkdirSync(dest, { recursive: true });
+  let written = 0;
+  for (const d of fs.readdirSync(BUNDLED_SKILLS_DIR, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const src = path.join(BUNDLED_SKILLS_DIR, d.name);
+    if (!fs.existsSync(path.join(src, "SKILL.md"))) continue;
+    // User already has it (enabled or disabled) — don't clobber.
+    if (fs.existsSync(path.join(dest, d.name))) continue;
+    if (fs.existsSync(path.join(disabled, d.name))) continue;
+    fs.cpSync(src, path.join(dest, d.name), { recursive: true });
+    written++;
+  }
+  return written;
 }
 
 /** List installed skills for the project (parsed SKILL.md frontmatter). */

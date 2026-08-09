@@ -16,7 +16,7 @@ import {
   WrenchIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import {
   Collapsible,
@@ -93,7 +93,7 @@ function fullArgs(args: unknown): string {
   return String(args);
 }
 
-function ToolCard({ item }: { item: ActivityItem }) {
+const ToolCard = memo(function ToolCard({ item }: { item: ActivityItem }) {
   const [open, setOpen] = useState(false);
   // A read of a SKILL.md is Pi's skill activation — surface the skill's name
   // instead of a generic file read (the path stays visible under Input). The
@@ -102,8 +102,13 @@ function ToolCard({ item }: { item: ActivityItem }) {
   const Icon = skill ? WandSparklesIcon : iconFor(item.toolName);
   const name = skill ? "skill" : (item.toolName ?? item.label);
   const summary = skill ?? summarize(item.toolName, item.args);
-  const args = fullArgs(item.args);
-  const hasDetail = Boolean(args || item.result);
+  // Only stringify args when the card is expanded — collapsed cards re-render
+  // often while the parent stream updates, and big JSON is pure waste there.
+  const args = useMemo(
+    () => (open ? fullArgs(item.args) : ""),
+    [open, item.args],
+  );
+  const hasDetail = item.args != null || Boolean(item.result);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-tool-call-id={item.id}>
@@ -169,14 +174,14 @@ function ToolCard({ item }: { item: ActivityItem }) {
       )}
     </Collapsible>
   );
-}
+});
 
 /**
  * Compact chip for a `notebook` tool call: the entry itself renders in the
  * Lab Notebook panel, so the transcript shows a one-line pointer with an
  * optional jump ("View in notebook"). item.id === the notebook entry id.
  */
-export function NotebookEntryChip({
+export const NotebookEntryChip = memo(function NotebookEntryChip({
   item,
   onView,
 }: {
@@ -211,10 +216,14 @@ export function NotebookEntryChip({
       )}
     </div>
   );
-}
+});
 
 /** The collapsible list of tool calls the agent made during a turn. */
-export function ToolActivityList({ activities }: { activities: ActivityItem[] }) {
+export const ToolActivityList = memo(function ToolActivityList({
+  activities,
+}: {
+  activities: ActivityItem[];
+}) {
   if (!activities.length) return null;
   return (
     <div className="my-1 space-y-1">
@@ -223,10 +232,14 @@ export function ToolActivityList({ activities }: { activities: ActivityItem[] })
       ))}
     </div>
   );
-}
+});
 
 /** Collapsible "thinking" disclosure for an assistant message's reasoning. */
-export function ReasoningBlock({ reasoning }: { reasoning: string }) {
+export const ReasoningBlock = memo(function ReasoningBlock({
+  reasoning,
+}: {
+  reasoning: string;
+}) {
   const [open, setOpen] = useState(false);
   if (!reasoning.trim()) return null;
   return (
@@ -245,4 +258,4 @@ export function ReasoningBlock({ reasoning }: { reasoning: string }) {
       </CollapsibleContent>
     </Collapsible>
   );
-}
+});

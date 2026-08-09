@@ -41,3 +41,8 @@ export const OLLAMA_BASE_URL =
 export function modalConfigured(): boolean {
   return Boolean(process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET);
 }
+
+/** Whether Runpod remote compute is configured (BYOK API key present). */
+export function runpodConfigured(): boolean {
+  return Boolean(process.env.RUNPOD_API_KEY?.trim());
+}

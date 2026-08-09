@@ -17,7 +17,7 @@ ResearchCraft is a free, open-source desktop app that runs an AI research assist
 - **149 pre-installed scientific skills** covering genomics, proteomics, drug discovery, materials science, and more.
 - **Living Lab Notebook** that writes itself as the agent works — exportable and printable.
 - **Sub-agents** — a roster of scientific specialists for literature, stats, code review, and more.
-- **Optional Modal cloud compute** for heavy jobs (CPU → H100), metered alongside model spend.
+- **Optional Modal / Runpod cloud compute** for heavy jobs (CPU → H100 / RTX 4090 / …), metered alongside model spend.
 
 ## Quick start
 

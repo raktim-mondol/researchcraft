@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import fastifyCors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyRequest } from "fastify";
-import { DEFAULT_PROJECT_ID, HOST, PORT, modalConfigured } from "./config.ts";
+import { DEFAULT_PROJECT_ID, HOST, PORT, modalConfigured, runpodConfigured } from "./config.ts";
 import { isCorsOriginAllowed } from "./cors.ts";
 import { ensureProjectExists, getProject } from "./projects.ts";
 import { withActiveProject } from "./scope.ts";
@@ -98,7 +98,10 @@ export async function buildApp() {
   });
 
   app.get("/health", async () => ({ status: "ok" }));
-  app.get("/config", async () => ({ modal_configured: modalConfigured() }));
+  app.get("/config", async () => ({
+    modal_configured: modalConfigured(),
+    runpod_configured: runpodConfigured(),
+  }));
 
   await registerProjectRoutes(app);
   await registerSessionRoutes(app);
