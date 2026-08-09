@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractGeminiImages,
   generateImages,
+  isGptImageModel,
 } from "../src/agent/image-gen-client.ts";
 
 const originalFetch = globalThis.fetch;
@@ -58,14 +59,25 @@ describe("extractGeminiImages", () => {
 });
 
 describe("generateImages openai", () => {
-  it("decodes b64_json", async () => {
+  it("detects gpt-image models", () => {
+    expect(isGptImageModel("gpt-image-2")).toBe(true);
+    expect(isGptImageModel("gpt-image-1.5")).toBe(true);
+    expect(isGptImageModel("dall-e-3")).toBe(false);
+  });
+
+  it("decodes b64_json and omits response_format for gpt-image-2", async () => {
     const b64 = Buffer.from("hello-image").toString("base64");
-    globalThis.fetch = vi.fn(async () =>
-      new Response(
-        JSON.stringify({ data: [{ b64_json: b64 }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    ) as typeof fetch;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(body.model).toBe("gpt-image-2");
+      expect(body.prompt).toBeTruthy();
+      // GPT Image rejects response_format — must not send it.
+      expect(body.response_format).toBeUndefined();
+      return new Response(JSON.stringify({ data: [{ b64_json: b64 }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
 
     const res = await generateImages({
       provider: "openai",
@@ -77,6 +89,27 @@ describe("generateImages openai", () => {
     expect(res.images).toHaveLength(1);
     expect(res.images[0].buffer.toString()).toBe("hello-image");
     expect(res.provider).toBe("openai");
+  });
+
+  it("still sends response_format for dall-e-3", async () => {
+    const b64 = Buffer.from("dalle").toString("base64");
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(body.response_format).toBe("b64_json");
+      return new Response(JSON.stringify({ data: [{ b64_json: b64 }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const res = await generateImages({
+      provider: "openai",
+      model: "dall-e-3",
+      prompt: "x",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+    });
+    expect(res.images[0].buffer.toString()).toBe("dalle");
   });
 
   it("surfaces API errors", async () => {

@@ -96,16 +96,22 @@ function errorMessage(data: unknown, status: number, fallback: string): string {
   return `${fallback} (HTTP ${status})`;
 }
 
+/** True for GPT Image family (gpt-image-2, gpt-image-1.5, gpt-image-1, gpt-image-1-mini). */
+export function isGptImageModel(model: string): boolean {
+  return /^gpt-image/i.test(model.trim());
+}
+
 async function generateOpenAI(req: GenerateImageRequest): Promise<GenerateImageResult> {
   if (!req.baseUrl) {
     throw new Error(
-      "OpenAI image generation needs a base URL (IMAGE_BASE_URL or LLM_BASE_URL).",
+      "OpenAI image generation needs IMAGE_BASE_URL (e.g. https://api.openai.com/v1).",
     );
   }
   if (req.references?.length) {
     throw new Error(
-      "reference_paths are not supported on the OpenAI path in this version. " +
-        "Use a Gemini image model (e.g. gemini-2.5-flash-image) for multi-image compose/edit.",
+      "reference_paths are not supported on the OpenAI Image API path in this version " +
+        "(would need multipart POST /v1/images/edits). " +
+        "Use a Gemini image model for multi-image compose, or generate then re-prompt.",
     );
   }
 
@@ -117,8 +123,11 @@ async function generateOpenAI(req: GenerateImageRequest): Promise<GenerateImageR
   if (req.size) body.size = req.size;
   if (req.quality) body.quality = req.quality;
   if (req.n && req.n > 1) body.n = Math.min(8, Math.floor(req.n));
-  // Prefer b64 when the API accepts it (DALL·E); GPT image models often return b64 by default.
-  body.response_format = "b64_json";
+  // Official GPT Image docs: omit response_format — gpt-image-* always return
+  // b64_json and reject the parameter (DALL·E-only). DALL·E still needs it.
+  if (!isGptImageModel(req.model)) {
+    body.response_format = "b64_json";
+  }
 
   const { signal, cleanup } = withTimeout(req.signal, req.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
@@ -133,7 +142,14 @@ async function generateOpenAI(req: GenerateImageRequest): Promise<GenerateImageR
       signal,
     });
     if (!ok) {
-      throw new Error(errorMessage(data, status, "OpenAI image generation failed"));
+      let msg = errorMessage(data, status, "OpenAI image generation failed");
+      // Common gate: GPT Image models require org verification on the OpenAI account.
+      if (/verif|organization|not available|does not have access/i.test(msg)) {
+        msg +=
+          " GPT Image models (gpt-image-2, …) may require API Organization Verification " +
+          "in the OpenAI developer console.";
+      }
+      throw new Error(msg);
     }
     const list =
       data && typeof data === "object" && Array.isArray((data as { data?: unknown }).data)

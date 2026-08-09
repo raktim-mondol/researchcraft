@@ -300,7 +300,8 @@ export function makeImageGenerateTool(
     label: "Image generate",
     description: [
       "Generate an image from a text prompt (and optional reference images) and save it into the project sandbox.",
-      "Providers: OpenAI Images (gpt-image-2, gpt-image-1, dall-e-3) via /images/generations, or Google Gemini Nano Banana",
+      "Providers: OpenAI Image API (gpt-image-2, gpt-image-1.5, gpt-image-1, gpt-image-1-mini, dall-e-3)",
+      "via POST /v1/images/generations, or Google Gemini Nano Banana",
       "(gemini-3.1-flash-image / lite / gemini-3-pro-image / gemini-2.5-flash-image) via Gemini Interactions API.",
       "Use for conceptual diagrams, proposal schematics, cover art, and style mocks — NOT for quantitative plots from data",
       "(prefer Python matplotlib/seaborn for data figures).",

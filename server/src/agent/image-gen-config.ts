@@ -115,8 +115,9 @@ export function estimateImageGenCostUsd(opts: {
       size === "4K" ? 0.12 : size === "2K" ? 0.08 : size.includes("0.5") ? 0.02 : 0.039;
     return per * n;
   }
+  // Approximate GPT Image 2 1024×1024 list prices (docs); provider bills actual usage.
   const q = (opts.quality || "auto").toLowerCase();
   const per =
-    q === "high" ? 0.08 : q === "medium" ? 0.04 : q === "low" ? 0.01 : 0.04;
+    q === "high" ? 0.211 : q === "medium" ? 0.053 : q === "low" ? 0.006 : 0.053;
   return per * n;
 }

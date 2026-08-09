@@ -16,7 +16,9 @@ Qwen, Ollama, Claude, etc.; image APIs need their own credentials.
 
 1. Open **Settings → API keys**.
 2. Under **Image generation**, set **Image model**, for example:
-   - OpenAI: `gpt-image-2` (or `gpt-image-1`, `dall-e-3`)
+   - OpenAI Image API (single-shot generate — not the Responses API tool):
+     - `gpt-image-2` (latest), `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini`, or `dall-e-3`
+     - Your OpenAI org may need [API Organization Verification](https://help.openai.com/en/articles/10910291-api-organization-verification) for GPT Image models
    - Gemini Nano Banana (recommended defaults first):
      - `gemini-3.1-flash-image` — Nano Banana 2 (best general default)
      - `gemini-3.1-flash-lite-image` — Nano Banana 2 Lite (fast/cheap)
