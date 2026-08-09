@@ -1,19 +1,20 @@
 /**
  * Image-generation endpoint config (OpenAI Images + Gemini Nano Banana).
  *
- * Separate from the chat LLM trio: image models almost never accept
- * /images/generations or Gemini image modalities under the chat model id.
- * IMAGE_MODEL must be set to enable the tool; credentials fall back to
- * LLM_* (OpenAI path) or GEMINI_API_KEY (Gemini path).
+ * Intentionally separate from the chat LLM endpoint. Chat may be Qwen,
+ * Ollama, Anthropic-via-proxy, etc., while images need a real Images API
+ * (typically OpenAI) or Gemini — never inherit LLM_BASE_URL / LLM_API_KEY.
+ *
+ * OpenAI path: IMAGE_MODEL + IMAGE_BASE_URL + IMAGE_API_KEY
+ * Gemini path: IMAGE_MODEL + GEMINI_API_KEY (or IMAGE_API_KEY override)
  */
-import { getLlmConfig } from "./models.ts";
 
 export type ImageProvider = "openai" | "gemini";
 
 export interface ImageGenConfig {
   provider: ImageProvider;
   model: string;
-  /** OpenAI-compatible base (…/v1). Empty for pure Gemini. */
+  /** OpenAI Images API base (…/v1). Empty for pure Gemini. */
   baseUrl: string;
   apiKey: string;
 }
@@ -49,7 +50,6 @@ export function getImageGenConfig(overrides?: {
   model?: string;
   provider?: string;
 }): ImageGenConfig {
-  const llm = getLlmConfig();
   const model = (
     overrides?.model?.trim() ||
     process.env.IMAGE_MODEL ||
@@ -74,14 +74,9 @@ export function getImageGenConfig(overrides?: {
     };
   }
 
-  const baseUrl = (
-    process.env.IMAGE_BASE_URL ||
-    llm.baseUrl ||
-    ""
-  )
-    .trim()
-    .replace(/\/+$/, "");
-  const apiKey = (process.env.IMAGE_API_KEY || llm.apiKey || "").trim();
+  // Dedicated image endpoint only — do not reuse chat LLM_* (e.g. Qwen).
+  const baseUrl = (process.env.IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
+  const apiKey = (process.env.IMAGE_API_KEY || "").trim();
   return {
     provider: "openai",
     model,
@@ -92,7 +87,7 @@ export function getImageGenConfig(overrides?: {
 
 /**
  * True when the agent can attempt image generation.
- * Requires IMAGE_MODEL plus credentials for the resolved provider.
+ * Requires IMAGE_MODEL plus dedicated credentials for the resolved provider.
  */
 export function imageGenConfigured(): boolean {
   const model = (process.env.IMAGE_MODEL || "").trim();
@@ -101,8 +96,8 @@ export function imageGenConfigured(): boolean {
   if (cfg.provider === "gemini") {
     return Boolean(cfg.apiKey);
   }
-  // OpenAI-compatible: need a base URL; key optional for some local servers.
-  return Boolean(cfg.baseUrl);
+  // OpenAI Images: own base URL + key (chat LLM may be a different provider).
+  return Boolean(cfg.baseUrl && cfg.apiKey);
 }
 
 /** Rough USD estimate for ledgering (provider still bills the real amount). */

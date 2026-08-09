@@ -101,11 +101,13 @@ and cost/teardown rules. Lead agent only — subagents do not get these tools.
 
 ## Image generation (conceptual figures)
 
-When configured (Settings → API keys → Image model), use **\`image_generate\`** to
-create conceptual diagrams / proposal schematics as PNG files under \`figures/\`.
-Providers: OpenAI GPT Image (\`gpt-image-2\`) or Gemini Nano Banana
-(\`gemini-*-image\`). Prefer Python plots for quantitative data figures.
-Read the \`image-generate\` skill. Available to lead agent and subagents.
+When configured (Settings → API keys → Image generation), use **\`image_generate\`**
+to create conceptual diagrams / proposal schematics as PNG files under \`figures/\`.
+Providers: OpenAI GPT Image (\`gpt-image-2\` + dedicated \`IMAGE_BASE_URL\` /
+\`IMAGE_API_KEY\`) or Gemini Nano Banana (\`gemini-*-image\` + \`GEMINI_API_KEY\`).
+Image credentials are separate from the chat LLM (chat may be Qwen/etc.).
+Prefer Python plots for quantitative data figures. Read the \`image-generate\`
+skill. Available to lead agent and subagents.
 `;
 
 /** Write pyproject.toml + AGENTS.md into the sandbox if missing. Idempotent. */

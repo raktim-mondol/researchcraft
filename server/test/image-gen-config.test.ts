@@ -52,22 +52,35 @@ describe("image-gen-config", () => {
 
   it("imageGenConfigured is false without IMAGE_MODEL", () => {
     delete process.env.IMAGE_MODEL;
-    process.env.LLM_BASE_URL = "https://api.openai.com/v1";
-    process.env.LLM_API_KEY = "sk-test";
+    process.env.IMAGE_BASE_URL = "https://api.openai.com/v1";
+    process.env.IMAGE_API_KEY = "sk-test";
     expect(imageGenConfigured()).toBe(false);
   });
 
-  it("openai path falls back to LLM base/key", () => {
+  it("openai path does not inherit chat LLM_* (e.g. Qwen chat)", () => {
     process.env.IMAGE_MODEL = "gpt-image-2";
     delete process.env.IMAGE_BASE_URL;
     delete process.env.IMAGE_API_KEY;
-    process.env.LLM_BASE_URL = "https://api.openai.com/v1";
-    process.env.LLM_API_KEY = "sk-openai";
+    process.env.LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    process.env.LLM_API_KEY = "sk-qwen";
+    expect(imageGenConfigured()).toBe(false);
+    const cfg = getImageGenConfig();
+    expect(cfg.provider).toBe("openai");
+    expect(cfg.baseUrl).toBe("");
+    expect(cfg.apiKey).toBe("");
+  });
+
+  it("openai path requires dedicated IMAGE_BASE_URL + IMAGE_API_KEY", () => {
+    process.env.IMAGE_MODEL = "gpt-image-2";
+    process.env.IMAGE_BASE_URL = "https://api.openai.com/v1";
+    process.env.IMAGE_API_KEY = "sk-openai-images";
+    process.env.LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    process.env.LLM_API_KEY = "sk-qwen";
     expect(imageGenConfigured()).toBe(true);
     const cfg = getImageGenConfig();
     expect(cfg.provider).toBe("openai");
     expect(cfg.baseUrl).toBe("https://api.openai.com/v1");
-    expect(cfg.apiKey).toBe("sk-openai");
+    expect(cfg.apiKey).toBe("sk-openai-images");
     expect(cfg.model).toBe("gpt-image-2");
   });
 

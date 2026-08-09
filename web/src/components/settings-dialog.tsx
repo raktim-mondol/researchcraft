@@ -565,8 +565,10 @@ function ImageGenForm({
           Enables the agent{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[10px]">image_generate</code>{" "}
           tool for conceptual figures (OpenAI GPT Image / Gemini Nano Banana).
-          Not for quantitative data plots — use Python for those. After saving,
-          open a <strong>new chat tab</strong> so the tool registers.
+          Credentials are <strong>separate from the chat model</strong> above
+          (chat may be Qwen or another provider). Not for quantitative data
+          plots — use Python for those. After saving, open a{" "}
+          <strong>new chat tab</strong> so the tool registers.
         </p>
       </div>
 
@@ -615,30 +617,34 @@ function ImageGenForm({
 
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium" htmlFor="image-base-url">
-          Image base URL (OpenAI path, optional)
+          Image base URL (required for OpenAI)
         </label>
         <Input
           id="image-base-url"
           type="url"
           value={baseUrl}
           autoComplete="off"
-          placeholder="Defaults to model endpoint base URL"
+          placeholder="https://api.openai.com/v1"
           className="h-8 text-xs font-mono"
           onChange={(e) => {
             setBaseUrl(e.target.value);
             setSaved(false);
           }}
         />
+        <p className="text-[11px] text-muted-foreground">
+          OpenAI Images API only — not your chat LLM base URL. Leave blank for
+          Gemini models.
+        </p>
       </div>
 
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium" htmlFor="image-api-key">
-          Image API key (optional)
+          Image API key (required for OpenAI)
         </label>
         {status?.imageApiKey?.set && (
           <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
             <span>
-              Override set — <code className="font-mono">{status.imageApiKey.masked}</code>
+              Key set — <code className="font-mono">{status.imageApiKey.masked}</code>
             </span>
           </div>
         )}
@@ -649,8 +655,8 @@ function ImageGenForm({
           autoComplete="off"
           placeholder={
             status?.imageApiKey?.set
-              ? "Leave blank to keep current override"
-              : "Leave blank: OpenAI uses model key; Gemini uses GEMINI_API_KEY"
+              ? "Leave blank to keep current key"
+              : "OpenAI sk-… (Gemini: use GEMINI_API_KEY below instead)"
           }
           className="h-8 text-xs font-mono"
           onChange={(e) => {

@@ -11,15 +11,18 @@ plots, heatmaps, ROC curves, etc., have the agent write Python
 
 ## Setup
 
+Image generation is **independent of the chat LLM**. Your chat model may be
+Qwen, Ollama, Claude, etc.; image APIs need their own credentials.
+
 1. Open **Settings → API keys**.
 2. Under **Image generation**, set **Image model**, for example:
    - OpenAI: `gpt-image-2` (or `gpt-image-1`, `dall-e-3`)
    - Gemini (Nano Banana): `gemini-2.5-flash-image`, `gemini-3.1-flash-image`, `gemini-3-pro-image`
-3. Credentials:
-   - **OpenAI path** reuses your model endpoint base URL + API key by default
-     (`LLM_BASE_URL` / `LLM_API_KEY`). Override with `IMAGE_BASE_URL` /
-     `IMAGE_API_KEY` if needed.
-   - **Gemini path** uses `GEMINI_API_KEY` (same key as optional Gemini search).
+3. Credentials (dedicated — **not** the chat endpoint):
+   - **OpenAI path:** `IMAGE_BASE_URL` (e.g. `https://api.openai.com/v1`) +
+     `IMAGE_API_KEY` (OpenAI `sk-…`). Required even if chat uses another provider.
+   - **Gemini path:** `GEMINI_API_KEY` (same optional key as Gemini search), or
+     `IMAGE_API_KEY` as an override. Base URL is fixed to Google’s API.
 4. Save, then open a **new chat tab** so the tool registers.
 
 You can also set env vars in `.env` (see `.env.example`).
@@ -48,5 +51,6 @@ Optional parameters: `provider`, `model`, `size` / `aspect_ratio`, `quality`,
   cost toward the project spend limit on lead-agent calls.
 - Generative images may invent labels or structure — treat them as drafts.
 - Gemini images may include a SynthID watermark (provider policy).
-- Chat-only proxies often do **not** implement OpenAI’s `/images/generations`;
-  point `IMAGE_BASE_URL` at a real Images API if needed.
+- Chat-only proxies (including many Qwen / OpenRouter chat endpoints) do
+  **not** implement OpenAI’s `/images/generations`. Point `IMAGE_BASE_URL` at
+  a real Images API (usually `https://api.openai.com/v1`).

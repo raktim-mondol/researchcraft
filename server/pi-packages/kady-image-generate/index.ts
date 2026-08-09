@@ -376,24 +376,15 @@ export const imageGenerateChildTool: ToolDefinition<typeof ImageGenerateParams> 
             { error: "unsupported" },
           );
         }
-        const baseUrl = (
-          process.env.IMAGE_BASE_URL ||
-          process.env.LLM_BASE_URL ||
-          process.env.OPENROUTER_BASE_URL ||
-          ""
-        )
-          .trim()
-          .replace(/\/+$/, "");
-        const apiKey = (
-          process.env.IMAGE_API_KEY ||
-          process.env.LLM_API_KEY ||
-          process.env.OPENROUTER_API_KEY ||
-          ""
-        ).trim();
-        if (!baseUrl) {
-          return textResult("LLM_BASE_URL or IMAGE_BASE_URL required for OpenAI images.", {
-            error: "not_configured",
-          });
+        // Dedicated image endpoint only — never reuse chat LLM_* (may be Qwen/etc.).
+        const baseUrl = (process.env.IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
+        const apiKey = (process.env.IMAGE_API_KEY || "").trim();
+        if (!baseUrl || !apiKey) {
+          return textResult(
+            "OpenAI images need IMAGE_BASE_URL and IMAGE_API_KEY " +
+              "(separate from the chat LLM settings).",
+            { error: "not_configured" },
+          );
         }
         images = await callOpenAI({
           baseUrl,

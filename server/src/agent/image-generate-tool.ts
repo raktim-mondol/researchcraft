@@ -157,9 +157,10 @@ export async function runImageGenerate(opts: {
   if (!imageGenConfigured() && !params.model?.trim()) {
     return textResult(
       "Image generation is not configured. In Settings → API keys set Image model " +
-        "(e.g. gpt-image-2 or gemini-2.5-flash-image), ensure the matching API key " +
-        "(OpenAI via model endpoint / IMAGE_API_KEY, or Gemini via GEMINI_API_KEY), " +
-        "then open a new chat tab so the tool registers.",
+        "(e.g. gpt-image-2 or gemini-2.5-flash-image) plus dedicated credentials: " +
+        "OpenAI path needs IMAGE_BASE_URL + IMAGE_API_KEY (not your chat LLM endpoint — " +
+        "chat may be Qwen/etc.); Gemini path needs GEMINI_API_KEY. " +
+        "Then open a new chat tab so the tool registers.",
       { error: "not_configured" },
     );
   }
@@ -183,9 +184,11 @@ export async function runImageGenerate(opts: {
       { error: "not_configured", provider: "gemini" },
     );
   }
-  if (cfg.provider === "openai" && !cfg.baseUrl) {
+  if (cfg.provider === "openai" && (!cfg.baseUrl || !cfg.apiKey)) {
     return textResult(
-      "OpenAI image generation needs LLM_BASE_URL or IMAGE_BASE_URL pointing at an Images-capable API (e.g. https://api.openai.com/v1).",
+      "OpenAI image generation needs its own IMAGE_BASE_URL and IMAGE_API_KEY " +
+        "(e.g. https://api.openai.com/v1 + sk-…). " +
+        "These are separate from the chat LLM settings — chat may use Qwen or another provider.",
       { error: "not_configured", provider: "openai" },
     );
   }
@@ -300,8 +303,9 @@ export function makeImageGenerateTool(
       "(gemini-2.5-flash-image, gemini-3.1-flash-image, gemini-3-pro-image) via the Gemini API.",
       "Use for conceptual diagrams, proposal schematics, cover art, and style mocks — NOT for quantitative plots from data",
       "(prefer Python matplotlib/seaborn for data figures).",
-      "Always set `path` under figures/ (e.g. figures/workflow.png). Configure IMAGE_MODEL in Settings → API keys;",
-      "OpenAI reuses the chat endpoint key by default; Gemini uses GEMINI_API_KEY.",
+      "Always set `path` under figures/ (e.g. figures/workflow.png). Configure IMAGE_MODEL in Settings → API keys.",
+      "OpenAI path needs dedicated IMAGE_BASE_URL + IMAGE_API_KEY (not the chat LLM — chat may be Qwen/etc.).",
+      "Gemini path uses GEMINI_API_KEY.",
     ].join(" "),
     promptSnippet:
       "image_generate: text-to-image (OpenAI gpt-image-* or Gemini Nano Banana) → sandbox PNG",

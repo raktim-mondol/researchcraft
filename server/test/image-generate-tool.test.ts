@@ -48,17 +48,21 @@ describe("runImageGenerate", () => {
     expect(res.details?.error).toBe("not_configured");
   });
 
-  it("writes openai image into sandbox", async () => {
+  it("writes openai image into sandbox with dedicated IMAGE_* creds", async () => {
     process.env.IMAGE_MODEL = "gpt-image-2";
-    process.env.LLM_BASE_URL = "https://api.openai.com/v1";
-    process.env.LLM_API_KEY = "sk-test";
+    process.env.IMAGE_BASE_URL = "https://api.openai.com/v1";
+    process.env.IMAGE_API_KEY = "sk-image";
+    // Chat LLM is a different provider — must not be used for images.
+    process.env.LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    process.env.LLM_API_KEY = "sk-qwen";
     const b64 = Buffer.from("png-bytes").toString("base64");
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ data: [{ b64_json: b64 }] }), {
+    globalThis.fetch = vi.fn(async (url) => {
+      expect(String(url)).toContain("api.openai.com");
+      return new Response(JSON.stringify({ data: [{ b64_json: b64 }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
-    ) as typeof fetch;
+      });
+    }) as typeof fetch;
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "img-sb-"));
     const res = await runImageGenerate({
