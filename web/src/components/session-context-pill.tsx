@@ -9,8 +9,6 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import {
-  CONTEXT_CRITICAL_RATIO,
-  CONTEXT_WARN_RATIO,
   contextPressure,
   contextRatio,
   type ContextUsage,
@@ -115,43 +113,16 @@ export function SessionContextPill({
           )}
         </Button>
       </HoverCardTrigger>
-      <HoverCardContent align="end" className="w-72 space-y-2 text-xs">
-        <div>
-          <p className="font-medium text-foreground">Context window</p>
-          <p className="mt-1 text-muted-foreground">
-            How much of the model&apos;s memory this chat is using. When it fills
-            up, later turns get slower and more expensive. Compacting summarizes
-            older turns so the agent keeps working room.
-          </p>
-        </div>
+      <HoverCardContent align="end" className="w-56 space-y-2 text-xs">
+        <p className="font-medium text-foreground">Context</p>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono tabular-nums">
           <dt className="text-muted-foreground">Used</dt>
-          <dd className="text-right">{usedLabel} tokens</dd>
+          <dd className="text-right">{usedLabel}</dd>
           <dt className="text-muted-foreground">Total</dt>
-          <dd className="text-right">{totalLabel} tokens</dd>
+          <dd className="text-right">{totalLabel}</dd>
           <dt className="text-muted-foreground">Filled</dt>
           <dd className="text-right">{pctLabel}</dd>
         </dl>
-        {context.tokens == null && (
-          <p className="text-muted-foreground">
-            Usage is unknown until the next model reply (common right after
-            compact).
-          </p>
-        )}
-        {(warn || critical) && (
-          <p
-            className={cn(
-              "rounded-md border px-2 py-1.5",
-              critical
-                ? "border-destructive/40 bg-destructive/10 text-destructive"
-                : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
-            )}
-          >
-            {critical
-              ? `Context is nearly full (≥${Math.round(CONTEXT_CRITICAL_RATIO * 100)}%). Compact soon to avoid quality loss or auto-compact mid-turn.`
-              : `Context is getting full (≥${Math.round(CONTEXT_WARN_RATIO * 100)}%). Consider compacting before the next long research loop.`}
-          </p>
-        )}
         {onCompact && (
           <Button
             size="sm"
@@ -166,7 +137,7 @@ export function SessionContextPill({
                 Compacting…
               </>
             ) : (
-              "Compact context"
+              "Compact"
             )}
           </Button>
         )}
