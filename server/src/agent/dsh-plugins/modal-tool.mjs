@@ -44,6 +44,7 @@ export function apply(ctx, config) {
       },
       image: {
         type: "object",
+        additionalProperties: false,
         properties: {
           base: { type: "string", description: 'Base registry image (default python:3.13-slim). e.g. "pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime".' },
           pip: { type: "array", items: { type: "string" }, description: "pip packages to install into the image" },

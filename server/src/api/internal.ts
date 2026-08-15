@@ -36,9 +36,17 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
     }
     // The tool caller's own request connection closing (its exec.signal
     // fired, or the runtime was torn down) is the abort signal here — Node's
-    // IncomingMessage has no native AbortSignal, so derive one from 'close'.
+    // IncomingMessage/ServerResponse have no native AbortSignal, so derive one
+    // from 'close'. This MUST watch `reply.raw` (the response), not `req.raw`
+    // (the request): the request stream closes as soon as its body has been
+    // fully read — near-instantly for a small JSON payload — which fired this
+    // "close" long before any real disconnect and aborted every interview
+    // within milliseconds. The response stays open until we actually reply,
+    // so its 'close' event only fires early on a genuine client disconnect.
     const abortController = new AbortController();
-    req.raw.on("close", () => abortController.abort());
+    reply.raw.on("close", () => {
+      if (!reply.raw.writableEnded) abortController.abort();
+    });
     try {
       const answer = await registerInterview(projectId, sessionId, toolCallId, payload, abortController.signal);
       return { answer };

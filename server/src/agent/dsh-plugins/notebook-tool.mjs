@@ -60,6 +60,7 @@ export function apply(ctx, config) {
       },
       code: {
         type: "object",
+        additionalProperties: false,
         properties: {
           source: { type: "string", required: true, description: "The code/snippet text" },
           lang: { type: "string", description: "Language for highlighting" },

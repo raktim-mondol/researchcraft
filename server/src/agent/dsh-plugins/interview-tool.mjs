@@ -21,6 +21,7 @@ const optionSchema = {
     { type: "string" },
     {
       type: "object",
+      additionalProperties: false,
       properties: {
         label: { type: "string", required: true, description: "Short option label" },
         content: { type: "string", description: "Longer Markdown body shown under the label" },
@@ -31,6 +32,7 @@ const optionSchema = {
 
 const mediaItemSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     type: {
       type: "string",
@@ -47,6 +49,7 @@ const mediaItemSchema = {
 
 const questionSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     id: { type: "string", required: true, description: "Unique identifier; responses are keyed by it" },
     type: {
@@ -70,6 +73,7 @@ const questionSchema = {
     context: { type: "string", description: "Help text under the question" },
     content: {
       type: "object",
+      additionalProperties: false,
       properties: {
         source: { type: "string", required: true, description: "Code / diff / Markdown text to display" },
         lang: { type: "string", description: 'Language for syntax highlighting; "diff" renders a diff, "md" renders Markdown' },
