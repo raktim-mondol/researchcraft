@@ -7790,5 +7790,82 @@
       }
     ],
     "requiresFiles": false
+  },
+  {
+    "id": "citation-snowball-search",
+    "name": "Citation Snowball Search",
+    "description": "Trace references and citations of a seed paper into a map of the literature cluster",
+    "category": "literature",
+    "icon": "Network",
+    "prompt": "Starting from the seed paper '{seed_paper}', build a citation map around it: (1) Use the literature tools (Scite / Consensus MCP first, then Parallel Search and web tools) to find the seed paper's metadata and DOI; (2) Collect backward citations (papers the seed cites) and forward citations (papers citing the seed), up to {max_papers} papers total, prioritizing highly cited and recent works; (3) For each paper, record title, authors, year, DOI/URL, and 1-2 sentences on how it connects to the seed paper; (4) Organize them into themes and note where they agree or conflict with the seed paper; (5) Write the results as a Markdown report with a Mermaid citation graph, and save it in the sandbox as a well-named .md file. Cite only papers returned by the search tools — never invent references; if a source is ambiguous, mark it as unverified rather than guessing.",
+    "suggestedSkills": [
+      "literature-review",
+      "paper-lookup",
+      "markdown-mermaid-writing"
+    ],
+    "placeholders": [
+      {
+        "key": "seed_paper",
+        "label": "Seed paper (title, DOI, or URL)",
+        "required": true
+      },
+      {
+        "key": "max_papers",
+        "label": "Maximum papers to collect (default: 30)",
+        "required": false
+      }
+    ],
+    "requiresFiles": false
+  },
+  {
+    "id": "sequencing-read-qc",
+    "name": "Quality-Check Sequencing Reads",
+    "description": "FastQC-style quality assessment of FASTQ files with plots and a verdict per sample",
+    "category": "genomics",
+    "icon": "Dna",
+    "prompt": "Assess the quality of the uploaded FASTQ file(s): (1) If the experiment type or library prep is unclear, ask one clarifying question via the interview tool first; (2) Compute per-base quality scores, GC content, adapter contamination, overrepresented sequences, and duplication levels for each sample; (3) Plot the key metrics (per-base quality, GC distribution, duplication) and save the figures as PNGs in the sandbox; (4) Write a QC report as a Markdown file with one verdict per sample — pass / warn / fail — with the specific metrics driving each verdict; (5) Summarize the verdicts and recommend concrete next steps (trimming, adapter removal, filtering) in chat.",
+    "suggestedSkills": [
+      "bulk-rnaseq",
+      "deeptools",
+      "scientific-visualization"
+    ],
+    "placeholders": [],
+    "requiresFiles": true
+  },
+  {
+    "id": "neural-recording-analysis",
+    "name": "Analyze Neural Recording Data",
+    "description": "Preprocess and characterize EEG / ephys recordings with quality metrics and plots",
+    "category": "neuro",
+    "icon": "Activity",
+    "prompt": "Analyze the uploaded neural recording data (EEG, ECoG, or ephys): (1) Confirm the recording modality and sampling rate with an interview question if they aren't stated; (2) Preprocess with appropriate filtering and artifact handling, and report exactly what was applied; (3) Compute quality and signal metrics (e.g. channel quality, SNR, artifact proportion, band power for EEG, spike statistics for ephys); (4) Produce publication-quality plots of the cleaned signal and the metrics, saved as PNGs in the sandbox; (5) Write a structured analysis summary as a Markdown file — methods applied, per-channel/session results, and caveats — and give the headline findings in chat.",
+    "suggestedSkills": [
+      "neurokit2",
+      "neuropixels-analysis",
+      "scientific-visualization"
+    ],
+    "placeholders": [],
+    "requiresFiles": true
+  },
+  {
+    "id": "scicomm-infographic",
+    "name": "Make a Science Infographic",
+    "description": "Turn findings into a clear, publication-style infographic with schematics",
+    "category": "scicomm",
+    "icon": "Presentation",
+    "prompt": "Create a science infographic about {topic}: (1) Ask one interview question to confirm the audience (peers, funders, or the public) and the single key message; (2) Plan the visual hierarchy — one headline message, 3-5 supporting points, and a simple flow or comparison structure; (3) Build the figure with clean schematics, readable typography, and an accessible color palette; keep every element legible at poster size; (4) Export the infographic as PNG or SVG into the sandbox with a well-named file; (5) Save a short Markdown explainer that walks through the figure, and summarize the design choices in chat. For quantitative data prefer real plots over decoration.",
+    "suggestedSkills": [
+      "infographics",
+      "scientific-schematics",
+      "markdown-mermaid-writing"
+    ],
+    "placeholders": [
+      {
+        "key": "topic",
+        "label": "Topic or finding to visualize",
+        "required": true
+      }
+    ],
+    "requiresFiles": false
   }
 ]
