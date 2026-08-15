@@ -16,7 +16,7 @@ These are limitations of the selected model, not of ResearchCraft itself; as mod
 **Workarounds:**
 
 - If a skill isn't behaving as expected, try **re-running the task** - results can vary between runs.
-- Try a different model in the dropdown. The picker is limited to OpenRouter models that advertise `tools` support, but tool-calling quality still varies across providers.
+- Try a different model in Settings → API keys — tool-calling quality still varies across providers and model sizes.
 
 ## Ollama / small local models
 
@@ -25,7 +25,7 @@ Local models served through Ollama are supported end-to-end, but they amplify th
 - Tool-calling fidelity is noticeably weaker on sub-frontier models.
 - Skills that rely on multi-tool choreography (running scripts, chaining edits, structured output) are the most fragile.
 
-If a task loops or ignores its skill, try a **larger local model** (or temporarily switch back to an OpenRouter-hosted model) before assuming the workflow is broken. See [Local models with Ollama](./local-models-ollama.md).
+If a task loops or ignores its skill, try a **larger local model** (or temporarily switch to a frontier hosted model) before assuming the workflow is broken. See [Local models with Ollama](./local-models-ollama.md).
 
 ## Tabbed chats
 

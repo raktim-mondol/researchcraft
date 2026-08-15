@@ -12,7 +12,7 @@ ResearchCraft is a free, open-source desktop app that runs an AI research assist
 ## Why ResearchCraft
 
 - **No coding experience required.** You describe what you want; ResearchCraft writes and runs the code and shows you its progress as it works.
-- **Your keys, your machine.** OpenRouter (or Ollama for local models). Nothing is sent to ResearchCraft servers for inference.
+- **Your keys, your machine.** Any OpenAI-compatible endpoint — OpenRouter, OpenAI, Anthropic-compatible proxies, or local Ollama. Nothing is sent to ResearchCraft servers for inference.
 - **Ask before it assumes.** When your request is ambiguous, ResearchCraft shows a short question form in the chat instead of guessing.
 - **149 pre-installed scientific skills** covering genomics, proteomics, drug discovery, materials science, and more.
 - **Living Lab Notebook** that writes itself as the agent works — exportable and printable.
@@ -51,10 +51,11 @@ Create a project, drop in your data, and ask ResearchCraft for what you want —
 Set keys in a repo-root `.env` (or via **Settings → API keys** in the app):
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
+LLM_BASE_URL=https://openrouter.ai/api/v1  # any OpenAI-compatible endpoint
+LLM_API_KEY=sk-or-...                      # Bearer key for that endpoint
+LLM_MODEL=anthropic/claude-sonnet-4        # model id the endpoint expects
 # optional
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-DEFAULT_MODEL_ID=openrouter/anthropic/claude-sonnet-4
+LLM_CONTEXT_WINDOW=200000                  # tokens; defaults to 1M if unset
 ```
 
 ## Documentation

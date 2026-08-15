@@ -13,7 +13,7 @@ The start script (`start.sh` on macOS/Linux, `start.cmd` on Windows — both thi
 | **Frontend** (Next.js) | 3000 | The web interface in your browser - chat, file browser, and file previews |
 | **Backend** (TypeScript + Pi SDK) | 8000 | The "brain" - runs ResearchCraft (a single Pi agent), manages your sandbox, files, sessions, and cost ledger |
 
-The backend embeds the [Pi coding-agent SDK](https://pi.dev) and runs **one flat agent** with built-in file/shell tools plus a `subagent` delegation tool (the [pi-subagents](https://github.com/nicobailon/pi-subagents) extension — see [Sub-agents](./sub-agents.md)) and any external tools you've connected via [MCP servers](./mcp-servers.md). Model calls go directly to **OpenRouter** (built-in Pi provider) or **Ollama** (local) — there is no separate proxy.
+The backend embeds the [Pi coding-agent SDK](https://pi.dev) and runs **one flat agent** with built-in file/shell tools plus a `subagent` delegation tool (the [pi-subagents](https://github.com/nicobailon/pi-subagents) extension — see [Sub-agents](./sub-agents.md)) and any external tools you've connected via [MCP servers](./mcp-servers.md). Model calls go directly to your configured **OpenAI-compatible endpoint** (OpenRouter, OpenAI, an Anthropic-compatible proxy, or a local **Ollama** daemon) — there is no separate proxy.
 
 When you send a message:
 
@@ -94,10 +94,16 @@ k-dense-byok/
 
 ## Model selection and routing
 
-Each chat tab picks one model. Model refs from the picker look like
-`openrouter/<vendor>/<model>` or `ollama/<name>`. The backend resolves these to
-Pi `Model` objects (`server/src/agent/models.ts`): OpenRouter is a built-in Pi
-provider (key from `OPENROUTER_API_KEY`), and Ollama points at your local daemon
-(`OLLAMA_BASE_URL`). There is no proxy — Pi calls the provider directly. See
-[Local models with Ollama](./local-models-ollama.md) and
-[Model selection](./model-selection.md).
+ResearchCraft runs one model for everything: the **user-configured OpenAI-compatible
+endpoint** saved under Settings → API keys (repo-root `.env`):
+
+- `LLM_BASE_URL` — e.g. `https://openrouter.ai/api/v1`, `https://api.openai.com/v1`,
+  or `http://localhost:11434/v1` for Ollama
+- `LLM_API_KEY` — Bearer key for that endpoint (optional for some local servers)
+- `LLM_MODEL` — the model id the endpoint expects
+- `LLM_CONTEXT_WINDOW` — optional token budget for the context meter / compaction
+
+The backend (`server/src/agent/models.ts`) builds the Pi `Model` for that endpoint.
+There is no proxy and no model catalogue — Pi calls the configured endpoint
+directly. See [Model selection](./model-selection.md) and
+[Local models with Ollama](./local-models-ollama.md).

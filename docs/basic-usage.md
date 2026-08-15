@@ -31,7 +31,7 @@ Click `+` in the chat tab strip to open a new chat in the same project. Each tab
 
 ### Choosing a model
 
-Use the model dropdown in the input bar. Any message can use any tool-capable model from OpenRouter (OpenAI, Anthropic, Google, xAI, Qwen, and more), or a free local model through [Ollama](./local-models-ollama.md). Different tabs can use different models. See [Model selection](./model-selection.md) for how the list is built.
+ResearchCraft runs the **one model you configure** in **Settings → API keys**: a base URL, API key, and model name for any OpenAI-compatible endpoint (OpenRouter, OpenAI, an Anthropic-compatible proxy, or a free local model through [Ollama](./local-models-ollama.md)). There is no dropdown — to switch models, change the model name in Settings. See [Model selection](./model-selection.md).
 
 ### Files
 

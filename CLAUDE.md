@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-ResearchCraft is a bring-your-own-key desktop AI research assistant: a Next.js frontend and a Fastify/TypeScript backend that embeds the [Pi coding-agent SDK](https://pi.dev) to run a single agent (plus sub-agent delegation) against OpenRouter or a local Ollama model. It is a **white-label fork of [K-Dense BYOK](https://github.com/K-Dense-AI/k-dense-byok)** (see `NOTICE`) — internal identifiers, env vars, and on-disk paths still use the `kady`/`KADY_` prefix from the upstream project even though the product is branded "ResearchCraft"; don't rename these, they're load-bearing for existing user data and package names.
+ResearchCraft is a bring-your-own-key desktop AI research assistant: a Next.js frontend and a Fastify/TypeScript backend that embeds the [Pi coding-agent SDK](https://pi.dev) to run a single agent (plus sub-agent delegation) against any user-configured OpenAI-compatible endpoint (OpenRouter, OpenAI, or a local Ollama daemon). It is a **white-label fork of [K-Dense BYOK](https://github.com/K-Dense-AI/k-dense-byok)** (see `NOTICE`) — internal identifiers, env vars, and on-disk paths still use the `kady`/`KADY_` prefix from the upstream project even though the product is branded "ResearchCraft"; don't rename these, they're load-bearing for existing user data and package names.
 
 Two services, always run together:
 
@@ -56,7 +56,7 @@ Tests are colocated with source as `*.test.ts`/`*.test.tsx` (e.g. `web/src/lib/n
 Read `docs/architecture.md` for the full picture; the essentials:
 
 ### Request flow
-The frontend POSTs to the backend tagged with a project id (`X-Project-Id` header / `?project` query / `researchcraft-project` cookie, resolved in `server/src/index.ts`) and a chat tab's session id. The backend runs one Pi agent turn for that session, which may delegate to sub-agents (each a short-lived `pi` subprocess in the same sandbox). Model calls go straight to OpenRouter or Ollama — **no proxy**. Events (text, tool calls, cost) stream back over SSE in real time.
+The frontend POSTs to the backend tagged with a project id (`X-Project-Id` header / `?project` query / `researchcraft-project` cookie, resolved in `server/src/index.ts`) and a chat tab's session id. The backend runs one Pi agent turn for that session, which may delegate to sub-agents (each a short-lived `pi` subprocess in the same sandbox). Model calls go straight to the configured OpenAI-compatible endpoint (`LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` from the repo-root `.env`, editable live under Settings → API keys) — **no proxy**. Events (text, tool calls, cost) stream back over SSE in real time.
 
 Every backend request runs inside an `AsyncLocalStorage`-scoped "active project" context (`server/src/scope.ts`, set in the `onRequest` hook in `index.ts`); code deep in the call stack reads the current project via `currentProjectId()`/`activePaths()` (`server/src/projects.ts`) rather than threading it through function args.
 
@@ -71,7 +71,7 @@ Every backend request runs inside an `AsyncLocalStorage`-scoped "active project"
 - `env.ts` — loads `.env` via the shared root-level `env-file.mjs` parser (existing `process.env` always wins; import this first in any new entry point).
 - `projects.ts` — project registry + path resolution (`resolvePaths`, `activePaths`).
 - `scope.ts` — the `AsyncLocalStorage` project-context plumbing.
-- `agent/` — all Pi wiring: `models.ts` (resolves `openrouter/<vendor>/<model>` and `ollama/<name>` refs to Pi `Model` objects), `tools.ts` (builtin tool list: `read bash edit write grep find ls`), `subagent-bridge.ts`/`subagents.ts` (the `pi-subagents` delegation tool), `web-access-bridge.ts` (the `pi-web-access` search/fetch tools), `mcp.ts` (per-project MCP server bridge), `skills.ts` (seeds/lists scientific skills into `sandbox/.pi/skills/`), `notebook*.ts` (the Living Lab Notebook feature — store, export, harvest, zip, annotations), `session-*.ts`, `events.ts` (SSE event shaping).
+- `agent/` — all Pi wiring: `models.ts` (builds the Pi `Model` for the single user-configured OpenAI-compatible endpoint; legacy `openrouter/…`/`ollama/…` refs are stripped), `tools.ts` (builtin tool list: `read bash edit write grep find ls`), `subagent-bridge.ts`/`subagents.ts` (the `pi-subagents` delegation tool), `web-access-bridge.ts` (the `pi-web-access` search/fetch tools), `mcp.ts` (per-project MCP server bridge), `skills.ts` (seeds/lists scientific skills into `sandbox/.pi/skills/`), `notebook*.ts` (the Living Lab Notebook feature — store, export, harvest, zip, annotations), `session-*.ts`, `events.ts` (SSE event shaping).
 - `api/` — Fastify route plugins, one file per resource area (`projects.ts`, `sessions.ts` = SSE chat, `sandbox.ts` = file browser/CRUD, `mcp.ts`, `credentials.ts`, `agents.ts`, `system.ts`).
 - `cost/ledger.ts` — per-session/per-project USD cost tracking and budget-cap enforcement (`spendLimitUsd`).
 - `latex/` — LaTeX compile/synctex/AI-assist support for the manuscript editor.
@@ -82,7 +82,7 @@ Every backend request runs inside an `AsyncLocalStorage`-scoped "active project"
 - `app/` — Next.js App Router entry (`layout.tsx`, `page.tsx`); this is a largely single-page app, not a multi-route site.
 - `components/` — feature components at the top level (`chat-tab.tsx`, `settings-dialog.tsx`, `sandbox-panel.tsx`, `lab-notebook-*`, etc.), with subdirs for cohesive clusters: `ai-elements/` (streaming chat primitives), `latex/` (manuscript editor), `pdf-viewer/`, `viewers/` (scientific file-format viewers: molecule, structure, imaging, spectrum, phylo, alignment, array data — each has a matching `registry.ts` entry in `lib/viewers/`), `ui/` (shadcn/ui primitives — treat as generated, prefer adding via `shadcn` CLI per `components.json` over hand-editing).
 - `lib/` — the bulk of the business logic as hooks + pure functions: `use-agent.ts` (SSE streaming + turn state), `use-sandbox.ts`, `use-projects.ts`, `use-skills.ts`, `notebook*.ts`, `latex/*` (outline, diagnostics, completions, spellcheck-as-worker, magic comments), `chat-routing.ts`, `capabilities.ts`. Most non-trivial logic here has a colocated `*.test.ts(x)`.
-- `data/` — static JSON catalogues bundled with the app: `workflows.json` (see below), `models.json`, `databases.json`, `modal-instances.json`.
+- `data/` — static JSON catalogues bundled with the app: `workflows.json` (see below), `databases.json`, `modal-instances.json`.
 - `lib/brand.ts` + `public/brand/` — the only files that should change for white-label/rebrand work (product name, logos). Don't touch the `kady`/kAdy-prefixed internal paths under `projects/*/sandbox/.kady/` — they're intentionally unchanged for backward data compatibility.
 
 ### Workflows catalogue

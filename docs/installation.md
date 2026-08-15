@@ -14,17 +14,17 @@ Everything else (Python tooling, packages, scientific skills) is installed autom
 
 > **Optional — LaTeX PDF reports:** if you want ResearchCraft's LaTeX editor to compile PDFs, install a TeX distribution: [MacTeX](https://www.tug.org/mactex/) (macOS), TeX Live (Linux), or [MiKTeX](https://miktex.org/) / [TeX Live](https://www.tug.org/texlive/) (Windows). Not needed for normal use.
 
-## 2. Get an OpenRouter API key
+## 2. Get a model API key
 
-ResearchCraft is "Bring Your Own Keys": the app is free, and you pay only for the AI model usage on your own account.
+ResearchCraft is "Bring Your Own Keys": the app is free, and you pay only for the AI model usage on your own account. It works with any **OpenAI-compatible endpoint** — the easiest is OpenRouter:
 
 1. Go to [openrouter.ai](https://openrouter.ai/) and sign up.
 2. Add a small amount of credit (a few dollars is plenty to start).
 3. Create an API key and copy it — it looks like `sk-or-...`.
 
-OpenRouter is a single account that gives you access to models from OpenAI, Anthropic, Google, xAI, Qwen, and more, so you don't need separate accounts with each provider.
+OpenRouter is a single account that gives you access to models from OpenAI, Anthropic, Google, xAI, Qwen, and more, so you don't need separate accounts with each provider. (You can also use OpenAI directly, an Anthropic-compatible proxy, or any other OpenAI-compatible API.)
 
-> **Prefer not to pay anything?** You can run the app entirely on free local models instead — see [Local models with Ollama](./local-models-ollama.md). In that case you can skip the OpenRouter key.
+> **Prefer not to pay anything?** You can run the app entirely on free local models instead — see [Local models with Ollama](./local-models-ollama.md). In that case you can skip the API key.
 
 ## 3. Download the project
 
@@ -40,7 +40,7 @@ cd researchcraft
 
 Move into the project folder (named `researchcraft` if you used the commands above).
 
-## 4. Add your API key
+## 4. Add your model endpoint
 
 In the project folder there is a template file called `.env.example`. Copy it to a file called `.env` (note the dot at the start):
 
@@ -49,13 +49,15 @@ cp .env.example .env      # macOS / Linux
 copy .env.example .env    # Windows
 ```
 
-Open `.env` in any text editor and paste your OpenRouter key:
+Open `.env` in any text editor and fill in your endpoint:
 
 ```
-OPENROUTER_API_KEY=sk-or-your-key-here
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=sk-or-your-key-here
+LLM_MODEL=anthropic/claude-sonnet-4
 ```
 
-That's the only key you need. If you skip this step, the startup script creates the `.env` file for you and reminds you — and you can also paste the key later inside the app under **Settings → API keys**.
+`LLM_BASE_URL` is any OpenAI-compatible endpoint, `LLM_API_KEY` is its key (optional for some local servers), and `LLM_MODEL` is the model id the endpoint expects. That's all you need. If you skip this step, the startup script creates the `.env` file for you and reminds you — and you can also fill these in later inside the app under **Settings → API keys**.
 
 ## 5. Start the app
 

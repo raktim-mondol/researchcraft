@@ -1,27 +1,44 @@
 # Model Selection
 
-Each chat tab picks **one model** for ResearchCraft. There is a single flat agent — no separate "expert" or orchestrator model. Subagents spawned with the `subagent` tool use the model named in their agent file (`sandbox/.pi/agents/*.md`) or passed per call; otherwise they fall back to Pi's default model resolution.
+There is a single flat agent — no separate "expert" or orchestrator model.
+ResearchCraft runs **one model** for everything: the endpoint you configure
+under **Settings → API keys** (stored in the repo-root `.env`). Subagents
+spawned with the `subagent` tool use the model named in their agent file
+(`sandbox/.pi/agents/*.md`) or passed per call; otherwise they fall back to
+Pi's default model resolution.
 
-The choice is stored per tab, so different chats in the same project can use different models, and you can switch models between messages within a tab.
+## The configured endpoint
 
-## OpenRouter models
+ResearchCraft talks to any **OpenAI-compatible** endpoint:
 
-The model picker is generated from OpenRouter models that advertise tool-calling support. ResearchCraft sends tool definitions with every turn, so models that do not support the `tools` parameter are excluded from the dropdown.
+- `LLM_BASE_URL` — base URL (include the `/v1` path if the provider uses it),
+  e.g. `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, or
+  `http://localhost:11434/v1` for Ollama.
+- `LLM_API_KEY` — Bearer key for that endpoint (optional for some local servers).
+- `LLM_MODEL` — the model id the endpoint expects (e.g. `gpt-4o`,
+  `anthropic/claude-sonnet-4`, `llama3.2`).
+- `LLM_CONTEXT_WINDOW` — optional token budget for the context meter and
+  auto-compaction (defaults to 1,000,000 when unset).
 
-The checked-in list lives at `web/src/data/models.json`, with ids prefixed as `openrouter/<vendor>/<model>`. The backend (`server/src/agent/models.ts`) resolves a picked id to a Pi `Model`: it prefers Pi's built-in OpenRouter entry, and otherwise synthesizes one using the context window, capabilities, and per-1M-token pricing from this catalogue. Pi computes the cost shown in the session/project meters from that pricing, so keeping `models.json` current keeps cost tracking (and the project spend cap) accurate. If the catalogue can't be loaded, the backend logs a startup warning and unknown models fall back to $0 pricing.
+Set these in Settings → API keys (saved live to `.env`) or edit `.env`
+directly. There is no model catalogue and no dropdown — to change the model,
+edit the model name in Settings.
 
-## OpenRouter Fusion presets
+## Switching models
 
-This fork adds an **Openrouter Fusion** section at the top of the picker: named presets where a panel of models deliberates on your prompt and an Opus 4.8 judge synthesizes one answer, with the combined panel price and (where published) the DRACO benchmark score shown on each entry. Selecting a Fusion preset rewrites the turn into an `openrouter/fusion` request and disables ResearchCraft's local tools for that turn so it returns the fused answer instead of running the agent loop. See [OpenRouter Fusion](./openrouter-fusion.md) for the presets and how the integration works.
+The configured model applies to every chat tab. Change `LLM_MODEL` in
+Settings → API keys and the next run uses it — no restart needed.
 
-## Defaults
+## Cost tracking
 
-- The default model is `openrouter/anthropic/claude-opus-4.8`.
-- Override it with `DEFAULT_MODEL_ID` in `.env` (a bare provider model id like `anthropic/claude-opus-4.8`, routed by `DEFAULT_MODEL_PROVIDER`).
-- To default to a local model, set `DEFAULT_MODEL_PROVIDER=ollama` and `DEFAULT_MODEL_ID` to a pulled model name (e.g. `llama3`).
+Your endpoint is billed directly by your provider, and ResearchCraft has no
+catalogue pricing for it. The session/project cost meters therefore show $0 for
+model spend unless the provider reports usage you meter externally; the
+project spend cap still applies to any costs that are reported (e.g. subagent
+and remote-compute ledger rows).
 
 ## Local Ollama models
 
-Pulled Ollama models are discovered live: the backend's `/ollama/models` endpoint queries your local daemon (`OLLAMA_BASE_URL/api/tags`), and the results appear under the **Local (Ollama)** section of the picker as `ollama/<name>`. Selecting one makes Pi call your local daemon directly — no OpenRouter key required for those models.
-
-Local models are useful for privacy and cost control, but tool-calling quality varies widely. For complex, tool-heavy tasks, frontier OpenRouter models are usually more reliable. See [Local models with Ollama](./local-models-ollama.md).
+Point `LLM_BASE_URL` at Ollama's OpenAI-compatible API
+(`http://localhost:11434/v1`) and set `LLM_MODEL` to a pulled model name. See
+[Local models with Ollama](./local-models-ollama.md).
