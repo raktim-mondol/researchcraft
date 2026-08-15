@@ -43,9 +43,13 @@ import type { HarnessSdkConfig } from "./dsh/types.ts";
 import type { PluginRow } from "./dsh/compose/rows.ts";
 import { buildPersonaSubagentRow } from "./dsh/compose/personas.ts";
 import { buildWebRows } from "./dsh/compose/web.ts";
+import { buildNotebookToolRow } from "./dsh/compose/notebook.ts";
+import { buildModalToolRow } from "./dsh/compose/modal.ts";
+import { buildInterviewToolRow } from "./dsh/compose/interview.ts";
 import { listAgents, seedAgentFiles } from "./agent-files.ts";
 import { LLM_ROUTE_NAME, buildLlmRoute, getLlmConfig, resolveModelId } from "./models.ts";
 import { resolveDshMcpServers } from "./mcp.ts";
+import { HOST, PORT, modalConfigured } from "../config.ts";
 import { consoleLogger, noopLogger, type Logger } from "./dsh/logger.ts";
 
 const logger: Logger = process.env.KADY_DSH_LOG ? consoleLogger : noopLogger;
@@ -130,18 +134,25 @@ const keyFor = (projectId: string, sessionId: string) => `${projectId}:${session
  * file's `model`/`thinking`/`tools`/`systemPromptMode` overrides have no
  * effect yet (Pi's roster supported all of these per-agent).
  */
-function extraRows(paths: ProjectPaths): PluginRow[] {
+/** The dsh subprocess always runs on this same machine — a bind-all host (0.0.0.0) is not a valid target address, so route it to loopback instead. */
+const INTERNAL_BRIDGE_HOST = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
+
+function extraRows(projectId: string, paths: ProjectPaths): PluginRow[] {
   seedAgentFiles(paths);
   const personas = listAgents(paths)
     .filter((a) => a.enabled !== false)
     .map((a) => ({ name: a.name, summary: a.description, systemPrompt: a.systemPrompt }));
   const personaRow = buildPersonaSubagentRow(personas);
+  const toolConfig = { projectId, kadyDir: paths.kadyDir, sandboxRoot: paths.sandbox };
   return [
     ...(personaRow ? [personaRow] : []),
     ...buildWebRows({
       exa: Boolean(process.env.EXA_API_KEY?.trim()),
       perplexity: Boolean(process.env.PERPLEXITY_API_KEY?.trim()),
     }),
+    buildNotebookToolRow(toolConfig),
+    ...(modalConfigured() ? [buildModalToolRow(toolConfig)] : []),
+    buildInterviewToolRow({ projectId, kadyDir: paths.kadyDir, internalBaseUrl: `http://${INTERNAL_BRIDGE_HOST}:${PORT}` }),
   ];
 }
 
@@ -169,10 +180,10 @@ function buildConfig(paths: ProjectPaths, model: string): HarnessSdkConfig {
   };
 }
 
-async function spawn(paths: ProjectPaths, model: string): Promise<HarnessRuntime> {
+async function spawn(projectId: string, paths: ProjectPaths, model: string): Promise<HarnessRuntime> {
   const runtime = new HarnessRuntime({
     config: buildConfig(paths, model),
-    extraRows: extraRows(paths),
+    extraRows: extraRows(projectId, paths),
   });
   await runtime.start();
   return runtime;
@@ -255,7 +266,7 @@ export async function getOrSpawnRuntime(
     manifest = { id: sessionId, projectId, createdAt: now, updatedAt: now, generations: [] };
   }
 
-  const runtime = await spawn(paths, model);
+  const runtime = await spawn(projectId, paths, model);
   const dshSessionId = randomUUID();
   const startedAt = new Date().toISOString();
   manifest.generations.push({ dshSessionId, model, startedAt });

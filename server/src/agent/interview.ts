@@ -7,17 +7,23 @@
  * whose user is already in a browser — so we register a custom tool with the
  * same question schema and render the form inline in the chat instead:
  *
- *   1. The agent calls `interview` with inline questions. Pi emits
- *      `tool_execution_start`, which sessions.ts streams to the frontend as a
- *      `tool_start` SSE frame carrying the full questions payload.
- *   2. The chat UI renders the form (web/src/components/interview-form.tsx)
- *      and POSTs answers to `/sessions/:id/interview/:toolCallId`.
- *   3. That resolves the pending promise here; the tool returns the
- *      structured responses (plus any uploaded images) to the model and the
- *      run continues on the same SSE stream.
+ *   1. The agent calls `interview` with inline questions
+ *      (`dsh-plugins/interview-tool.mjs`, running inside the dsh runtime
+ *      SUBPROCESS). Its `tool/call` event streams to the frontend as a
+ *      `tool_start` SSE frame carrying the full questions payload (via
+ *      `events.ts`, generically — no interview-specific code there).
+ *   2. The plugin POSTs to `POST /internal/interview` on THIS (main Fastify)
+ *      process — the only place `pending` below can live, since the tool
+ *      itself runs in a separate OS process — which calls
+ *      `registerInterview()` and holds the HTTP response open.
+ *   3. The chat UI renders the form (web/src/components/interview-form.tsx)
+ *      and POSTs answers to the public `/sessions/:id/interview/:toolCallId`
+ *      route, which calls `resolveInterview()`, settling step 2's promise and
+ *      the plugin's blocked HTTP call together; the tool returns the
+ *      structured responses to the model and the run continues.
  *
- * Sub-agent child `pi` processes never get this tool — they are headless and
- * must not block on user input.
+ * Sub-agent children never get this tool — they must not block on user input
+ * (persona-subagents.mjs doesn't register it).
  */
 import { Type, type Static } from "typebox";
 
@@ -183,7 +189,7 @@ export function pendingInterviewFor(
   return null;
 }
 
-function validateQuestions(questions: InterviewQuestion[]): string | null {
+export function validateQuestions(questions: InterviewQuestion[]): string | null {
   const seen = new Set<string>();
   for (const q of questions) {
     if (seen.has(q.id)) return `Duplicate question id "${q.id}"`;
@@ -233,21 +239,59 @@ export function validateAnswer(answer: InterviewAnswer): string | null {
   return null;
 }
 
-// TODO(#20): the model-facing `interview` tool itself (registering it so the
-// dsh agent can actually call it) is not yet ported. It needs an HTTP bridge
-// — the tool runs inside the dsh runtime SUBPROCESS, but `pending` above must
-// stay in THIS (main Fastify) process since it's what `/sessions/:id/interview/
-// :toolCallId` resolves against. Planned shape: a raw Cordis plugin (same
-// local-file-row pattern as `dsh-plugins/persona-subagents.mjs`) whose
-// `execute()` POSTs the questions payload to a new internal endpoint on this
-// server (e.g. `POST /internal/interview`), which registers into `pending`
-// exactly as `validateQuestions`/`pending.set` above do today and holds the
-// HTTP response open until `resolveInterview()` settles it (or it times out)
-// — i.e. the promise-based blocking wait below moves from an in-process
-// await to an HTTP long-poll, same `pending` map, same timeout/abort/cancel
-// semantics. `InterviewParams` (TypeBox) still describes the tool's model-
-// facing schema; it needs translating into dsh's `defineTool()` parameter
-// shape (see `dsh-plugins/persona-subagents.mjs`'s header comment for that
-// pattern) rather than passed through directly — the two schema shapes are
-// not wire-compatible (TypeBox = standard JSON Schema; dsh's ParameterSchemaSpec
-// keeps `required` as a per-property flag, not a schema-level array).
+/**
+ * Register one interview and block until it's answered, dismissed, timed
+ * out, or aborted. This is the piece that used to live directly inside the
+ * Pi tool's `execute()`; now it's called from `api/internal.ts`'s
+ * `POST /internal/interview` handler instead, since the model-facing tool
+ * itself runs inside the dsh runtime SUBPROCESS (a separate OS process from
+ * this one) and reaches this `pending` map only over that HTTP bridge — see
+ * `dsh-plugins/interview-tool.mjs`.
+ */
+export function registerInterview(
+  projectId: string,
+  sessionId: string,
+  toolCallId: string,
+  payload: InterviewParamsT,
+  signal?: AbortSignal,
+): Promise<InterviewAnswer> {
+  const invalid = validateQuestions(payload.questions);
+  if (invalid) return Promise.reject(new Error(invalid));
+  const timeoutS = Math.min(
+    Math.max(payload.timeout ?? DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S),
+    MAX_TIMEOUT_S,
+  );
+
+  return new Promise<InterviewAnswer>((resolve, reject) => {
+    const cleanup = () => {
+      pending.delete(toolCallId);
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `Interview timed out after ${timeoutS}s. The user did NOT answer any of these questions. ` +
+            "Do not claim or imply that the user chose, provided, confirmed, or approved any option — they did not respond at all. " +
+            "Tell the user plainly that you received no answer, then proceed using your own recommended defaults, " +
+            "explicitly labelling them as assumptions the user can correct.",
+        ),
+      );
+    }, timeoutS * 1000);
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Interview aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    pending.set(toolCallId, {
+      projectId,
+      sessionId,
+      payload,
+      settle: (a) => {
+        cleanup();
+        resolve(a);
+      },
+    });
+  });
+}

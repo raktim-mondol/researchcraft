@@ -33,8 +33,11 @@ export class HarnessProvisioningError extends HarnessSdkError {}
  * (typically a `TransportClosedError` from `@deepseek-ai/dsh-sdk-client`).
  */
 export class HarnessSpawnError extends HarnessSdkError {
-  constructor(message: string, readonly attempts: number, options?: { cause?: unknown }) {
+  readonly attempts: number
+
+  constructor(message: string, attempts: number, options?: { cause?: unknown }) {
     super(message, options)
+    this.attempts = attempts
   }
 }
 
@@ -53,8 +56,11 @@ export class HarnessTimeoutError extends HarnessSdkError {}
  * `max-tokens` when not configured as success, `aborted`, `refusal`).
  */
 export class HarnessTurnError extends HarnessSdkError {
-  constructor(message: string, readonly stopReason: string | undefined, options?: { cause?: unknown }) {
+  readonly stopReason: string | undefined
+
+  constructor(message: string, stopReason: string | undefined, options?: { cause?: unknown }) {
     super(message, options)
+    this.stopReason = stopReason
   }
 }
 

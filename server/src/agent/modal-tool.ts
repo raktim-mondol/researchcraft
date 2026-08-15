@@ -1,8 +1,8 @@
 /**
- * Native `modal_run` tool: run a command/script on a remote Modal Sandbox
- * (CPU or GPU) the user has chosen, then bring results back.
+ * Core logic for the `modal_run` tool: run a command/script on a remote
+ * Modal Sandbox (CPU or GPU) the user has chosen, then bring results back.
  *
- * This is the "agent-driven offload" model: the Pi agent loop stays local and
+ * This is the "agent-driven offload" model: the agent loop stays local and
  * the local project sandbox stays the canonical filesystem. When the agent
  * needs heavy or GPU compute it calls `modal_run`, which:
  *   1. spins an isolated Modal Sandbox on the selected instance (BYOK creds —
@@ -14,10 +14,13 @@
  *   6. meters wall-time × the instance's hourly rate as a `compute` cost row,
  *   7. terminates the sandbox.
  *
- * Built as an in-process custom tool (mirrors interview.ts) — it is available
- * to the main agent session. Child `pi` subagent processes do not get it (they
- * load tools the project-settings way); extending it to subagents would mean
- * promoting this to a Pi package bridge (see web-access-bridge.ts).
+ * `runModal` is plain, framework-agnostic Node logic — no Pi or dsh types —
+ * so it can be called directly from `dsh-plugins/modal-tool.mjs`, which runs
+ * inside the dsh runtime SUBPROCESS (a separate OS process from this one) and
+ * wires it to `defineTool()`. That plugin resolves `sessionId`/`runId` via
+ * `run-ids.ts`'s file-mirrored run context (see that module's header) rather
+ * than any in-process state, since none of this module's state is visible
+ * from the subprocess.
  *
  * Note: `ollama/*` models run on the local daemon and are unaffected — Modal
  * offload is for compute steps, not for relocating the model loop. No secrets
@@ -26,9 +29,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { Type, type Static } from "typebox";
 import { ModalClient, type Sandbox } from "modal";
-import { resolvePaths } from "../projects.ts";
 import { isWithin } from "../sandbox-fs.ts";
 import { isBudgetExceeded, recordModalRun } from "../cost/ledger.ts";
 import {
@@ -44,51 +45,30 @@ const MAX_TIMEOUT_S = 3600;
 /** Cap each stream in the tool result so a chatty job can't blow the context. */
 const MAX_OUTPUT_CHARS = 16000;
 
-// Per-session default compute instance, stashed by the /run handler before a
-// run (mirrors fusion-bridge's setFusionConfig). Module-level because the tool
-// is constructed before the session exists and reads the live value by id.
-// `null` means no Modal default selected ("local") — the tool then falls back
-// to DEFAULT_INSTANCE_ID when the agent doesn't name an instance.
-const sessionComputeTargets = new Map<string, string | null>();
+export { DEFAULT_INSTANCE_ID, MODAL_INSTANCE_IDS };
 
-/** Stash (or clear, with `null`/"local") the default compute instance for a session. */
-export function setSessionComputeTarget(sessionId: string, instanceId: string | null): void {
-  sessionComputeTargets.set(sessionId, instanceId && instanceId !== "local" ? instanceId : null);
+export interface ModalRunArgs {
+  command: string;
+  instance?: string;
+  image?: { base?: string; pip?: string[]; apt?: string[] };
+  files_in?: string[];
+  files_out?: string[];
+  timeout_sec?: number;
 }
 
-export const ModalRunParams = Type.Object({
-  command: Type.String({
-    description: "Shell command to run remotely (executed via `sh -lc` in /workspace), e.g. \"python train.py --epochs 50\".",
-  }),
-  instance: Type.Optional(
-    Type.String({
-      description: `Compute instance id. One of: ${MODAL_INSTANCE_IDS.join(", ")}. Omit to use the session's selected default (else "${DEFAULT_INSTANCE_ID}").`,
-    }),
-  ),
-  image: Type.Optional(
-    Type.Object({
-      base: Type.Optional(
-        Type.String({ description: "Base registry image (default python:3.13-slim). e.g. \"pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime\"." }),
-      ),
-      pip: Type.Optional(Type.Array(Type.String(), { description: "pip packages to install into the image" })),
-      apt: Type.Optional(Type.Array(Type.String(), { description: "apt packages to install into the image" })),
-    }),
-  ),
-  files_in: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Sandbox-relative paths to upload into the remote /workspace before running.",
-    }),
-  ),
-  files_out: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Sandbox-relative paths produced by the job to download back into the local project after it finishes.",
-    }),
-  ),
-  timeout_sec: Type.Optional(
-    Type.Number({ description: `Max seconds before the sandbox is killed (default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}).` }),
-  ),
-});
-export type ModalRunParamsT = Static<typeof ModalRunParams>;
+export interface ModalRunContext {
+  projectId: string;
+  sessionId: string;
+  sandboxRoot: string;
+  /** The session's selected default compute instance ("local"/unset = none). */
+  computeTarget?: string;
+  signal?: AbortSignal;
+}
+
+export interface ModalRunResult {
+  text: string;
+  details: Record<string, unknown>;
+}
 
 /** Resolve a sandbox-relative path against the project sandbox, refusing traversal. */
 function safeUnder(sandboxRoot: string, rel: string): string {
@@ -104,16 +84,146 @@ function truncate(s: string): string {
   return `…(${s.length - MAX_OUTPUT_CHARS} earlier chars truncated)\n${s.slice(-MAX_OUTPUT_CHARS)}`;
 }
 
-function textResult(text: string, details?: Record<string, unknown>) {
-  return { content: [{ type: "text" as const, text }], details };
-}
+export async function runModal(args: ModalRunArgs, ctx: ModalRunContext): Promise<ModalRunResult> {
+  const budget = isBudgetExceeded(ctx.projectId);
+  if (budget.exceeded) {
+    return {
+      text: `Modal run blocked: the project has reached its spend limit ` +
+        `($${budget.totalUsd.toFixed(2)} / $${(budget.limitUsd ?? 0).toFixed(2)}). ` +
+        `Finish without remote compute or ask the user to raise the limit.`,
+      details: { blocked: "budget" },
+    };
+  }
 
-// TODO(#20): port to a real dsh tool (raw Cordis plugin, same local-file-row
-// pattern as `dsh-plugins/persona-subagents.mjs`). The `execute()` body above
-// this point (Modal SDK calls, file staging, cost recording via
-// `recordModalRun`) is pure Node logic with no Pi dependency and moves over
-// directly. `sessionComputeTargets` has the same cross-process problem as
-// `run-ids.ts`'s map (see notebook.ts's TODO): it's set from the MAIN process
-// by `/sessions/:id/run` but would need reading from inside the dsh runtime
-// SUBPROCESS — needs the same file-mirror-keyed-by-dsh-session-id fix before
-// `params.instance ?? sessionComputeTargets.get(sessionId)` can work there.
+  const tokenId = process.env.MODAL_TOKEN_ID;
+  const tokenSecret = process.env.MODAL_TOKEN_SECRET;
+  if (!tokenId || !tokenSecret) {
+    return {
+      text: "Modal is not configured. Add MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in Settings → API keys (get them at https://modal.com/settings).",
+      details: { error: "not_configured" },
+    };
+  }
+
+  const instanceId = args.instance ?? ctx.computeTarget ?? DEFAULT_INSTANCE_ID;
+  const spec = resolveInstance(instanceId);
+  if (!spec) {
+    return {
+      text: `Unknown compute instance "${instanceId}". Valid instances: ${MODAL_INSTANCE_IDS.join(", ")}.`,
+      details: { error: "unknown_instance" },
+    };
+  }
+
+  const sandboxRoot = ctx.sandboxRoot;
+  const timeoutMs =
+    Math.min(Math.max(Math.floor(args.timeout_sec ?? DEFAULT_TIMEOUT_S), 1), MAX_TIMEOUT_S) * 1000;
+
+  const modal = new ModalClient({ tokenId, tokenSecret });
+  const startedAt = Date.now();
+  let sb: Sandbox | null = null;
+  const onAbort = () => {
+    sb?.terminate().catch(() => {});
+  };
+  ctx.signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const app = await modal.apps.fromName(APP_NAME, { createIfMissing: true });
+
+    let image = modal.images.fromRegistry(args.image?.base ?? spec.defaultImage);
+    const dockerCmds: string[] = [];
+    if (args.image?.apt?.length) {
+      dockerCmds.push(
+        `RUN apt-get update && apt-get install -y ${args.image.apt.join(" ")} && rm -rf /var/lib/apt/lists/*`,
+      );
+    }
+    if (args.image?.pip?.length) {
+      dockerCmds.push(`RUN pip install --no-cache-dir ${args.image.pip.join(" ")}`);
+    }
+    if (dockerCmds.length) image = image.dockerfileCommands(dockerCmds);
+
+    sb = await modal.sandboxes.create(app, image, {
+      gpu: spec.gpu ?? undefined,
+      cpu: spec.cpu,
+      memoryMiB: spec.memoryMiB,
+      timeoutMs,
+    });
+    await sb.filesystem.makeDirectory(WORKDIR, { createParents: true });
+
+    // Stage inputs.
+    const stagedIn: string[] = [];
+    const missingIn: string[] = [];
+    for (const rel of args.files_in ?? []) {
+      const local = safeUnder(sandboxRoot, rel);
+      if (!fs.existsSync(local)) {
+        missingIn.push(rel);
+        continue;
+      }
+      const remote = path.posix.join(WORKDIR, rel);
+      const remoteDir = path.posix.dirname(remote);
+      if (remoteDir && remoteDir !== WORKDIR) {
+        await sb.filesystem.makeDirectory(remoteDir, { createParents: true });
+      }
+      await sb.filesystem.copyFromLocal(local, remote);
+      stagedIn.push(rel);
+    }
+
+    // Run.
+    const proc = await sb.exec(["sh", "-lc", args.command], {
+      stdout: "pipe",
+      stderr: "pipe",
+      workdir: WORKDIR,
+      timeoutMs,
+    });
+    const [stdout, stderr] = await Promise.all([
+      proc.stdout.readText(),
+      proc.stderr.readText(),
+    ]);
+    const exitCode = await proc.wait();
+
+    // Collect outputs.
+    const collectedOut: string[] = [];
+    const missingOut: string[] = [];
+    for (const rel of args.files_out ?? []) {
+      const local = safeUnder(sandboxRoot, rel);
+      const remote = path.posix.join(WORKDIR, rel);
+      try {
+        fs.mkdirSync(path.dirname(local), { recursive: true });
+        await sb.filesystem.copyToLocal(remote, local);
+        collectedOut.push(rel);
+      } catch {
+        missingOut.push(rel);
+      }
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const costUsd = (durationMs / 3_600_000) * spec.pricePerHour;
+    recordModalRun(ctx.projectId, ctx.sessionId, costUsd, `modal:${spec.id}`);
+
+    const summary = {
+      instance: spec.id,
+      gpu: spec.gpu,
+      exit_code: exitCode,
+      duration_ms: durationMs,
+      cost_usd: Number(costUsd.toFixed(4)),
+      ...(stagedIn.length ? { files_in: stagedIn } : {}),
+      ...(missingIn.length ? { files_in_missing: missingIn } : {}),
+      files_out: collectedOut,
+      ...(missingOut.length ? { files_out_missing: missingOut } : {}),
+    };
+    const text =
+      `${JSON.stringify(summary, null, 2)}\n\n` +
+      `--- stdout ---\n${truncate(stdout) || "(empty)"}\n\n` +
+      `--- stderr ---\n${truncate(stderr) || "(empty)"}`;
+    return { text, details: summary };
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    return {
+      text: `Modal run failed on instance "${spec.id}": ${msg}\n` +
+        `If this is an authentication error, check MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in Settings.`,
+      details: { error: "modal_failure", instance: spec.id },
+    };
+  } finally {
+    ctx.signal?.removeEventListener("abort", onAbort);
+    if (sb) await sb.terminate().catch(() => {});
+    modal.close();
+  }
+}

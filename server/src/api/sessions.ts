@@ -40,7 +40,7 @@ import {
   writeNotebookAnnotations,
 } from "../agent/notebook-annotations.ts";
 import { MethodsDraftError, runMethodsDraft } from "../agent/methods-draft.ts";
-import { mintRunId, setSessionRunId } from "../agent/run-ids.ts";
+import { clearRunContext, mintRunId, writeRunContext } from "../agent/run-ids.ts";
 import { SandboxError } from "../sandbox-fs.ts";
 import { toNotebook, toShellScript } from "../agent/session-export.ts";
 import { toHistory } from "../agent/session-history.ts";
@@ -267,14 +267,11 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     },
   );
 
-  // The interview tool blocks its run until the user answers here (or the
+  // The interview tool (dsh-plugins/interview-tool.mjs, bridged via
+  // api/internal.ts) blocks its run until the user answers here (or the
   // form is dismissed). 404 = nothing waiting (answered, timed out, aborted);
   // 400 = fixable submission problem — the pending interview is NOT consumed,
   // so the form can correct and resubmit.
-  //
-  // NOTE: the `interview` model-facing tool itself is not yet wired into the
-  // dsh agent (see interview.ts's TODO(#20)) — these endpoints are ready but
-  // nothing will populate `pending` until that lands.
   app.post<{ Params: { id: string; toolCallId: string }; Body: InterviewAnswer }>(
     "/sessions/:id/interview/:toolCallId",
     async (req, reply) => {
@@ -396,7 +393,9 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       // No awaits between the guard above and this claim, so it is atomic.
       activeRuns.add(runKey);
       const runId = mintRunId();
-      setSessionRunId(req.params.id, runId);
+      // Set once the live dsh session id is known (below); cleared in the
+      // outer finally, which covers every exit path including early returns.
+      let liveDshSessionId: string | undefined;
 
       try {
         if (body.thinkingLevel !== undefined && parseThinkingLevel(body.thinkingLevel) === undefined) {
@@ -442,6 +441,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           req.log.info({ sessionId: req.params.id, model: modelId }, "model changed; respawning runtime");
         }
         const { runtime, dshSessionId } = await getOrSpawnRuntime(projectId, paths, req.params.id, modelId);
+        liveDshSessionId = dshSessionId;
+        writeRunContext(paths, dshSessionId, {
+          sessionId: req.params.id,
+          runId,
+          ...(body.computeTarget ? { computeTarget: body.computeTarget } : {}),
+        });
 
         const abortController = new AbortController();
         req.raw.on("close", () => abortController.abort());
@@ -496,7 +501,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         }
         if (!raw.writableEnded) raw.end();
       } finally {
-        setSessionRunId(req.params.id, null);
+        if (liveDshSessionId) clearRunContext(paths, liveDshSessionId);
         activeRuns.delete(runKey);
       }
     },

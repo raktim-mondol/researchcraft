@@ -176,14 +176,20 @@ export function clearOAuthTokens(serverName: string): void {
  * `onRedirect` is invoked when the user must visit an authorize URL.
  */
 export class FileOAuthClientProvider implements OAuthClientProvider {
+  readonly serverName: string;
+  private readonly _scope: string | undefined;
+  private readonly _onRedirect: (url: URL) => void;
   private _data: StoredOAuthState;
   private _pendingState: string | undefined;
 
   constructor(
-    readonly serverName: string,
-    private readonly _scope: string | undefined,
-    private readonly _onRedirect: (url: URL) => void,
+    serverName: string,
+    scope: string | undefined,
+    onRedirect: (url: URL) => void,
   ) {
+    this.serverName = serverName;
+    this._scope = scope;
+    this._onRedirect = onRedirect;
     this._data = readStore(serverName);
   }
 
