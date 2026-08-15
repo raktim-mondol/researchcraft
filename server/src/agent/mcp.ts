@@ -65,6 +65,29 @@ interface ProjectMcpState {
   authFingerprint: string;
   clients: Client[];
   tools: ToolDefinition[];
+  /**
+   * Re-dials a server after its remote session died (streamable-HTTP
+   * endpoints expire idle sessions). Swaps the client in `clients` so
+   * dispose still closes the live one.
+   */
+  reconnects: Map<string, () => Promise<Client>>;
+}
+
+/**
+ * Remote streamable-HTTP MCP sessions expire when idle; the SDK then closes
+ * the transport and every callTool throws `Not connected`. Match the
+ * connection-level failures worth one reconnect-and-retry (as opposed to
+ * real tool errors, which should surface as-is).
+ */
+export function isMcpConnectionError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err);
+  return (
+    msg.includes("Not connected") ||
+    msg.includes("connection is closed") ||
+    msg.includes("Transport") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("terminated")
+  );
 }
 
 /** Presence-only hash so we never store key material in the cache key. */
@@ -141,26 +164,39 @@ async function connectServer(
   return client;
 }
 
-function wrapTool(
+export function wrapTool(
   serverName: string,
   client: Client,
   tool: { name: string; description?: string; inputSchema: unknown },
+  reconnect?: () => Promise<Client>,
 ): ToolDefinition {
   const parameters = (tool.inputSchema ?? {
     type: "object",
     properties: {},
   }) as TSchema;
+  let liveClient = client;
   return {
     name: `mcp__${sanitizeName(serverName)}__${sanitizeName(tool.name)}`,
     label: `${serverName}: ${tool.name}`,
     description: tool.description ?? `${tool.name} (MCP server: ${serverName})`,
     parameters,
     execute: async (_toolCallId, params, signal) => {
-      const result = await client.callTool(
-        { name: tool.name, arguments: (params ?? {}) as Record<string, unknown> },
-        undefined,
-        { timeout: CALL_TIMEOUT_MS, signal },
-      );
+      const call = async (c: Client) =>
+        c.callTool(
+          { name: tool.name, arguments: (params ?? {}) as Record<string, unknown> },
+          undefined,
+          { timeout: CALL_TIMEOUT_MS, signal },
+        );
+      let result;
+      try {
+        result = await call(liveClient);
+      } catch (err) {
+        // Remote MCP sessions expire when idle; reconnect once and retry
+        // instead of surfacing "Not connected" to the model forever.
+        if (!reconnect || !isMcpConnectionError(err)) throw err;
+        liveClient = await reconnect();
+        result = await call(liveClient);
+      }
       const blocks = Array.isArray(result.content) ? result.content : [];
       const content = blocks
         .map((block) => {
@@ -190,19 +226,33 @@ async function buildState(
   const servers = parseConfig(configText);
   const clients: Client[] = [];
   const tools: ToolDefinition[] = [];
+  const reconnects = new Map<string, () => Promise<Client>>();
+  const state: ProjectMcpState = { configText, authFingerprint, clients, tools, reconnects };
   await Promise.all(
     Object.entries(servers).map(async ([name, config]) => {
       try {
-        const client = await connectServer(name, config, paths.sandbox);
+        let client = await connectServer(name, config, paths.sandbox);
         clients.push(client);
         const { tools: serverTools } = await client.listTools();
-        for (const t of serverTools) tools.push(wrapTool(name, client, t));
+        // Re-dial hook: replaces the dead client in-place so the state's
+        // client list (and closeClients) always track the live connection.
+        reconnects.set(name, async () => {
+          const dead = client;
+          const fresh = await connectServer(name, config, paths.sandbox);
+          const idx = clients.indexOf(dead);
+          if (idx !== -1) clients[idx] = fresh;
+          else clients.push(fresh);
+          client = fresh;
+          await dead.close().catch(() => {/* already dead */});
+          return fresh;
+        });
+        for (const t of serverTools) tools.push(wrapTool(name, client, t, reconnects.get(name)));
       } catch (err) {
         console.warn(`[mcp] server "${name}" unavailable, skipping: ${String(err)}`);
       }
     }),
   );
-  return { configText, authFingerprint, clients, tools };
+  return state;
 }
 
 /**
