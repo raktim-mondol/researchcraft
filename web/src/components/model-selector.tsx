@@ -16,8 +16,6 @@ export type Model = {
   description: string;
   default?: boolean;
   expertDefault?: boolean;
-  isFusion?: boolean;
-  fusionConfig?: Record<string, unknown>;
 };
 
 /** @deprecated Prefer the live model from useModels(); kept for callers that need a constant. */

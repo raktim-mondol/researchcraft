@@ -44,15 +44,6 @@ describe("buildRunBody", () => {
     expect(buildRunBody({ message: "hi", computeTarget: "local" })).toEqual({ message: "hi" });
   });
 
-  it("includes fusionConfig when provided", () => {
-    const fusionConfig = { plugins: [] };
-    expect(buildRunBody({ message: "hi", model: "fusion/x", fusionConfig })).toEqual({
-      message: "hi",
-      model: "fusion/x",
-      fusionConfig,
-    });
-  });
-
   it("includes images when present and omits an empty list", () => {
     const images = [{ data: "aGVsbG8=", mimeType: "image/png" }];
     expect(buildRunBody({ message: "hi", images })).toEqual({ message: "hi", images });

@@ -32,7 +32,6 @@ import { makeModalTool } from "./modal-tool.ts";
 import { makeRunpodTool } from "./runpod-tool.ts";
 import { makeImageGenerateTool } from "./image-generate-tool.ts";
 import { makeSubagentLedgerExtension, subagentsExtensionPath } from "./subagent-bridge.ts";
-import { makeFusionRequestExtension } from "./fusion-bridge.ts";
 import { WEB_ACCESS_TOOLS, ensureWebAccess } from "./web-access-bridge.ts";
 import {
   seedNotebookPackage,
@@ -127,9 +126,6 @@ async function build(
     additionalExtensionPaths: [subagentsExtensionPath()],
     extensionFactories: [
       makeSubagentLedgerExtension(projectId, () => holder.session?.sessionId ?? ""),
-      // Rewrites the outgoing provider body to an OpenRouter Fusion request when
-      // the /run handler stashed a Fusion config for this session (setFusionConfig).
-      makeFusionRequestExtension(() => holder.session?.sessionId ?? ""),
       // Harvest notebook entries the roster's subagents logged (child pi
       // processes get the notebook tool via seedNotebookPackage above) into
       // the parent notebook — the parent is the single writer.

@@ -154,9 +154,6 @@ export async function runMethodsDraft(
         `$${(budget.limitUsd ?? 0).toFixed(2)}). Raise the limit in project settings.`,
     );
   }
-  if (opts.model?.startsWith("fusion/")) {
-    throw new MethodsDraftError(422, "Fusion models are not supported for the Methods draft");
-  }
   const paths = resolvePaths(projectId);
   const projectName = getProject(projectId)?.name;
   const model = resolveModel(opts.model, getModelRegistry());

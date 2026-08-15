@@ -46,10 +46,10 @@ const MAX_TIMEOUT_S = 3600;
 const MAX_OUTPUT_CHARS = 16000;
 
 // Per-session default compute instance, stashed by the /run handler before a
-// run (mirrors fusion-bridge's setFusionConfig). Module-level because the tool
-// is constructed before the session exists and reads the live value by id.
-// `null` means no Modal default selected ("local") — the tool then falls back
-// to DEFAULT_INSTANCE_ID when the agent doesn't name an instance.
+// run. Module-level because the tool is constructed before the session exists
+// and reads the live value by id. `null` means no Modal default selected
+// ("local") — the tool then falls back to DEFAULT_INSTANCE_ID when the agent
+// doesn't name an instance.
 const sessionComputeTargets = new Map<string, string | null>();
 
 /** Stash (or clear, with `null`/"local") the default compute instance for a session. */

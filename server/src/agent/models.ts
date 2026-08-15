@@ -116,23 +116,14 @@ export function setupAuth(authStorage: AuthStorage): void {
 }
 
 /**
- * Resolve a model ref to a Pi Model.
- *
- * Fusion refs are rejected — Fusion was OpenRouter-specific and is no longer
- * offered in the UI. All other refs use the user-configured endpoint; when a
- * ref is omitted, LLM_MODEL is used.
+ * Resolve a model ref to a Pi Model. All refs use the user-configured
+ * endpoint; when a ref is omitted, LLM_MODEL is used.
  */
 export function resolveModel(
   ref: string | undefined,
   _registry: ModelRegistry,
-  _fusionConfig?: Record<string, unknown>,
 ): Model<Api> {
   const r = (ref ?? "").trim();
-  if (r.startsWith("fusion/")) {
-    throw new Error(
-      "OpenRouter Fusion is not supported. Configure a single model under Settings → API keys.",
-    );
-  }
   // Strip legacy prefixes so old session state still works.
   let modelId = r;
   if (modelId.startsWith("openrouter/")) modelId = modelId.slice("openrouter/".length);

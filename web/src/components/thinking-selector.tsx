@@ -138,5 +138,4 @@ export function ThinkingSelector({
 
 // The selected level rides the run request as `thinkingLevel`; the backend
 // applies it with Pi's setThinkingLevel (clamped to what the model supports).
-// Disabled for Ollama (reasoning:false) and Fusion (wire body rewritten) models,
-// whose runs carry no level.
+// Disabled for models that don't advertise reasoning — their runs carry no level.

@@ -136,16 +136,6 @@ describe("runMethodsDraft", () => {
     ).rejects.toMatchObject({ status: 402 });
   });
 
-  it("throws 422 for a fusion model", async () => {
-    const p = createProject({ name: "Fusion" });
-    appendNotebookEntry("s", entryOf(), p.id);
-    await expect(
-      withActiveProject(p.id, () =>
-        runMethodsDraft("s", p.id, { model: "fusion/foo" }, async () => fakeMessage("x")),
-      ),
-    ).rejects.toMatchObject({ status: 422 });
-  });
-
   it("throws 502 when the model call throws", async () => {
     const p = createProject({ name: "Throw" });
     appendNotebookEntry("s", entryOf(), p.id);

@@ -115,9 +115,6 @@ export async function runLatexAssist(
         `$${(budget.limitUsd ?? 0).toFixed(2)}). Raise the limit in project settings.`,
     );
   }
-  if (req.model?.startsWith("fusion/")) {
-    throw new AssistError(422, "Fusion models are not supported for editor AI assist");
-  }
   const model = resolveModel(req.model, getModelRegistry());
   let msg: AssistantMessage;
   try {

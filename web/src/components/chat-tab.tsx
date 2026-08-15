@@ -105,7 +105,7 @@ interface QueuedMessage {
   id: string;
   rawText: string;
   text: string;
-  model: { id: string; label: string; fusionConfig?: Record<string, unknown> };
+  model: { id: string; label: string };
   databases: Database[];
   skills: Skill[];
   files: string[];
@@ -121,7 +121,7 @@ interface QueuedMessage {
 /** Models whose runs must NOT carry a thinkingLevel. */
 function thinkingUnsupported(model: { id: string; provider?: string }): boolean {
   // Unconfigured placeholder — no real model yet.
-  return model.id === "unconfigured" || model.id.startsWith("fusion/");
+  return model.id === "unconfigured";
 }
 
 function BudgetBanner({
@@ -1341,7 +1341,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           skills: next.skills.map((s) => s.name),
           databases: next.databases.map((db) => db.name),
         },
-        next.model.fusionConfig,
         next.computeTarget ?? undefined,
         next.thinkingLevel ?? undefined,
         next.images.length > 0 ? next.images : undefined,
@@ -1428,7 +1427,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           model: {
             id: selectedModel.id,
             label: selectedModel.label,
-            fusionConfig: selectedModel.fusionConfig,
           },
           databases: [...selectedDbs],
           skills: [...selectedSkills],
@@ -1457,7 +1455,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             skills: selectedSkills.map((s) => s.name),
             databases: selectedDbs.map((db) => db.name),
           },
-          selectedModel.fusionConfig,
           selectedComputeTarget?.wireId ?? undefined,
           thinkingDisabled ? undefined : thinkingLevel,
           images.length > 0 ? images : undefined,
@@ -1549,7 +1546,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
           prompt,
           selectedModel.id,
           undefined,
-          selectedModel.fusionConfig,
           selectedComputeTarget?.wireId ?? undefined,
           thinkingDisabled ? undefined : thinkingLevel,
         );
@@ -1570,7 +1566,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             skills: suggestedSkills,
             databases: [],
           },
-          model.fusionConfig,
           selectedComputeTarget?.wireId ?? undefined,
           thinkingUnsupported(model) ? undefined : thinkingLevel,
         );
@@ -1582,7 +1577,6 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
       runCompact,
       budgetState,
       selectedModel.id,
-      selectedModel.fusionConfig,
       selectedComputeTarget?.wireId,
       thinkingDisabled,
       thinkingLevel,

@@ -105,12 +105,6 @@ describe("user-configured LLM endpoint", () => {
     expect(m.baseUrl).toBe("https://api.openai.com/v1");
   });
 
-  it("rejects fusion model refs", () => {
-    process.env.LLM_BASE_URL = "https://api.openai.com/v1";
-    process.env.LLM_MODEL = "gpt-4o";
-    expect(() => resolveModel("fusion/foo", {} as never)).toThrow(/Fusion/);
-  });
-
   it("llmConfigured is false without base URL or model", () => {
     delete process.env.LLM_BASE_URL;
     delete process.env.OPENROUTER_BASE_URL;

@@ -266,16 +266,14 @@ interface HistoryItem {
 export function buildRunBody(opts: {
   message: string;
   model?: string;
-  fusionConfig?: Record<string, unknown>;
   computeTarget?: string;
   thinkingLevel?: string;
   images?: PromptImage[];
 }): Record<string, unknown> {
-  const { message, model, fusionConfig, computeTarget, thinkingLevel, images } = opts;
+  const { message, model, computeTarget, thinkingLevel, images } = opts;
   return {
     message,
     ...(model ? { model } : {}),
-    ...(fusionConfig ? { fusionConfig } : {}),
     ...(computeTarget && computeTarget !== "local" ? { computeTarget } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(images && images.length > 0 ? { images } : {}),
@@ -457,7 +455,6 @@ export function useAgent() {
       text: string,
       model?: string,
       _legacyMeta?: unknown,
-      fusionConfig?: Record<string, unknown>,
       computeTarget?: string,
       thinkingLevel?: string,
       images?: PromptImage[],
@@ -498,7 +495,6 @@ export function useAgent() {
               buildRunBody({
                 message: text,
                 model,
-                fusionConfig,
                 computeTarget,
                 thinkingLevel,
                 images,
