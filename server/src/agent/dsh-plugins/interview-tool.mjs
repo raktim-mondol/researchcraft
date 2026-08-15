@@ -58,7 +58,6 @@ const questionSchema = {
       enum: ["single", "multi", "text", "image", "info"],
       description: "single = radio choice, multi = checkboxes, text = free text, image = user uploads images, info = non-interactive context panel",
     },
-    question: { type: "string", required: true, description: "The question text shown to the user" },
     options: { type: "array", items: optionSchema, description: "Choices (required for single/multi)" },
     recommended: {
       oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
@@ -81,6 +80,13 @@ const questionSchema = {
       },
     },
     media: { oneOf: [mediaItemSchema, { type: "array", items: mediaItemSchema }] },
+    // Declared last on purpose: dsh's structured tool-call generation writes
+    // JSON keys in schema-declaration order, so putting the actual question
+    // text after all of its supporting metadata (options, recommendation,
+    // context, content, media) means the model has already committed to that
+    // context by the time it writes the question — and the question reliably
+    // lands as the final, most visible field for a reader scanning the call.
+    question: { type: "string", required: true, description: "The question text shown to the user" },
   },
 };
 
