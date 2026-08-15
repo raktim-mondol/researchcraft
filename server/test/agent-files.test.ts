@@ -6,7 +6,6 @@ import { ensureProjectExists } from "../src/projects.ts";
 import {
   deleteProjectAgent,
   listAgents,
-  listBuiltinAgents,
   listProjectAgents,
   parseAgentMarkdown,
   restoreDefaultAgents,
@@ -110,17 +109,8 @@ describe("agent files CRUD + seeding", () => {
     expect(agents.some((a) => a.name === "my-own")).toBe(true);
   });
 
-  it("lists builtins from the pi-subagents package, shadowed by project agents", () => {
-    const paths = ensureProjectExists("builtin-test");
-    const builtins = listBuiltinAgents();
-    expect(builtins.length).toBeGreaterThan(0);
-    expect(builtins.every((a) => a.source === "builtin")).toBe(true);
-
-    const shadowName = builtins[0].name;
-    writeProjectAgent(paths, shadowName, { description: "override", systemPrompt: "Mine." });
-    const all = listAgents(paths);
-    const entry = all.filter((a) => a.name === shadowName);
-    expect(entry).toHaveLength(1);
-    expect(entry[0].source).toBe("project");
-  });
+  // "Builtin" specialists (bundled inside the pi-subagents package) have no
+  // dsh equivalent — listBuiltinAgents() always returns [] now (see its
+  // updated doc comment in agent-files.ts) — so there is nothing left to
+  // shadow-test here.
 });

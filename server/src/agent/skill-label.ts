@@ -1,19 +1,36 @@
 /**
  * Resolve a skill's display name from a `read` tool call.
  *
- * Pi has no "skill invoked" event: skills are advertised in the system prompt
- * and the agent activates one by reading its `SKILL.md` (or, for single-file
- * skills, the `.md` directly under a skills root). When a read targets such a
- * file, the emitters attach the skill's name to the `tool_start` client frame
- * (`skill` field) so the chat UI can label the row as a skill activation.
+ * dsh has no "skill invoked" event: skills are advertised in the system
+ * prompt and the agent activates one by reading its `SKILL.md` (or, for
+ * single-file skills, the `.md` directly under a skills root). When a read
+ * targets such a file, the emitters attach the skill's name to the
+ * `tool_start` client frame (`skill` field) so the chat UI can label the row
+ * as a skill activation.
  *
- * The authoritative name is the frontmatter `name:` — parsed with Pi's own
- * skill loader so the label always matches what the system prompt advertises
- * to the model. The directory (or file) basename is the fallback when the
+ * The authoritative name is the frontmatter `name:` (Agent Skills standard:
+ * a `---`-fenced YAML block at the top of `SKILL.md`), read directly rather
+ * than through a framework loader — this is one field of one file, not worth
+ * a dependency. The directory (or file) basename is the fallback when the
  * file is gone or its frontmatter carries no usable name.
  */
+import fs from "node:fs";
 import path from "node:path";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+
+/** The `name:` field of a leading `---`-fenced YAML frontmatter block, or null. */
+function readFrontmatterName(absFile: string): string | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(absFile, "utf8");
+  } catch {
+    return null;
+  }
+  const fence = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text);
+  if (!fence) return null;
+  const nameLine = /^name:\s*(.+)$/m.exec(fence[1]);
+  if (!nameLine) return null;
+  return nameLine[1].trim().replace(/^["']|["']$/g, "") || null;
+}
 
 /**
  * Path-shape detection + fallback name. Mirrored client-side in
@@ -34,22 +51,6 @@ function skillPathName(p: string): string | null {
   return single ? single[1] : null;
 }
 
-/** Frontmatter `name:` of the skill file, via Pi's loader; null when the file
- *  is unreadable or the loader rejects it. */
-function frontmatterName(absFile: string): string | null {
-  try {
-    const { skills } = loadSkillsFromDir({
-      dir: path.dirname(absFile),
-      source: "read",
-    });
-    const target = path.resolve(absFile);
-    const hit = skills.find((s) => path.resolve(s.filePath) === target);
-    return hit?.name || null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Skill name for a `read` tool path, or null when the read is not a skill
  * activation. Relative paths resolve against `sandboxRoot` (the agent cwd).
@@ -64,5 +65,5 @@ export function skillLabelForRead(
   const abs = path.isAbsolute(rawPath)
     ? rawPath
     : path.join(sandboxRoot, rawPath);
-  return frontmatterName(abs) ?? fallback;
+  return readFrontmatterName(abs) ?? fallback;
 }

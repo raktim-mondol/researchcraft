@@ -17,12 +17,9 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import type { ProjectPaths } from "../projects.ts";
 import { SUBAGENT_TYPES } from "./subagents.ts";
 import { readPiSettings, writePiSettings, type ToggleResult } from "./capability-state.ts";
-
-const require_ = createRequire(import.meta.url);
 
 export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -222,20 +219,18 @@ export function listProjectAgents(paths: ProjectPaths): AgentFile[] {
     .filter((a): a is AgentFile => a !== null);
 }
 
-/** Agents bundled inside the pi-subagents package (read-only). */
+/**
+ * Agents bundled inside the pi-subagents package (read-only) — Pi's own
+ * roster of 8 general-purpose delegation agents, distinct from ResearchCraft's
+ * scientific specialists (`subagents.ts`). dsh has no equivalent bundled
+ * roster to read here (its delegation is generic `ctx.subagents.start()`, not
+ * a named-persona package), so this always returns `[]` now; kept rather than
+ * deleted since `listAgents`/`setSpecialistEnabled` still call it and the
+ * empty-list behavior is exactly what "no builtins available" should look
+ * like to both.
+ */
 export function listBuiltinAgents(): AgentFile[] {
-  try {
-    const pkgDir = path.dirname(require_.resolve("pi-subagents/package.json"));
-    const dir = path.join(pkgDir, "agents");
-    return fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .map((f) => readAgentFile(path.join(dir, f), "builtin"))
-      .filter((a): a is AgentFile => a !== null);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 /**

@@ -406,9 +406,9 @@ checkNode();
 ensureUv();
 checkGit();
 checkPython();
-// Pi itself needs no separate install: it's an npm dependency of server/
-// (@earendil-works/pi-coding-agent), installed/updated by npm install below.
-log(`  Pi agent ${sym.ok} (bundled with backend packages — no global install needed)`);
+// The DeepSeek Harness runtime needs no separate install: it's vendored
+// under server/vendor/dsh and installed/updated by npm install below.
+log(`  Agent runtime ${sym.ok} (bundled with backend packages — no global install needed)`);
 log("");
 
 setupEnv();
@@ -438,7 +438,7 @@ log("");
 
 log("Starting services...");
 log("");
-startService(`Backend on port ${BACKEND_PORT} (Pi agent, TypeScript)`, "server", ["run", "start"]);
+startService(`Backend on port ${BACKEND_PORT} (TypeScript)`, "server", ["run", "start"]);
 startService(`Frontend on port ${FRONTEND_PORT} (Next.js UI)`, "web", [
   "run", "dev", "--", "-p", String(FRONTEND_PORT),
 ]);

@@ -1,25 +1,35 @@
 /**
  * Session lifecycle + the streaming run endpoint.
  *
- * Replaces ADK's /apps/.../sessions + /run_sse. Each session is a Pi JSONL
- * conversation; `/sessions/:id/run` streams the agent's events as SSE using the
- * compact client schema from agent/events.ts, then emits a terminal `cost`
- * frame sourced from Pi's per-session usage accounting.
+ * Each ResearchCraft session maps to a `HarnessRuntime` (dsh) spawned/reused
+ * by `session-registry.ts`; `/sessions/:id/run` drives one prompt through it
+ * and streams the compact client SSE schema from `agent/events.ts`, then
+ * emits a terminal `cost` frame sourced from the run's own usage summary.
+ *
+ * Fusion (OpenRouter-specific multi-model routing) is gone — it required
+ * rewriting the outgoing provider request body and disabling local tools for
+ * the turn, both Pi-specific mechanisms with no dsh equivalent, and Fusion
+ * was already removed from the UI before this migration.
+ *
+ * Live per-turn abort/steer are more limited than under Pi — see
+ * `session-registry.ts`'s file doc: the wire protocol has no per-request
+ * cancel (abort closes the whole runtime) and no live queue-preview, so
+ * `/steer` here queues into the SAME in-flight `session/prompt` delivery
+ * (dsh's `followup()` — see the JSON-RPC server's `prompt()`) rather than
+ * previewing a pending queue the way Pi's `queue_update` frames did.
  */
 import type { FastifyInstance } from "fastify";
 import { activePaths, getProject, touchProject } from "../projects.ts";
 import { corsResponseHeaders } from "../cors.ts";
 import { currentProjectId } from "../scope.ts";
-import { toClientFrame, type ClientFrame } from "../agent/events.ts";
-import { setFusionConfig } from "../agent/fusion-bridge.ts";
+import { createFrameMapper, type ClientFrame } from "../agent/events.ts";
 import {
   pendingInterviewFor,
   resolveInterview,
   validateAnswer,
   type InterviewAnswer,
 } from "../agent/interview.ts";
-import { setSessionComputeTarget } from "../agent/modal-tool.ts";
-import { llmConfigured, resolveModel } from "../agent/models.ts";
+import { llmConfigured, resolveModelId } from "../agent/models.ts";
 import { parseRunImages } from "../agent/prompt-images.ts";
 import { readNotebookEntries } from "../agent/notebook-store.ts";
 import { notebookToMarkdown } from "../agent/notebook-export.ts";
@@ -32,75 +42,54 @@ import {
 import { MethodsDraftError, runMethodsDraft } from "../agent/methods-draft.ts";
 import { mintRunId, setSessionRunId } from "../agent/run-ids.ts";
 import { SandboxError } from "../sandbox-fs.ts";
-import {
-  findSessionFile,
-  toNotebook,
-  toShellScript,
-} from "../agent/session-export.ts";
+import { toNotebook, toShellScript } from "../agent/session-export.ts";
 import { toHistory } from "../agent/session-history.ts";
 import {
+  abortSession,
   createSession,
-  getModelRegistry,
-  getSession,
+  getManifest,
+  getOrSpawnRuntime,
+  isStale,
   listSessions,
 } from "../agent/session-registry.ts";
 import { parseThinkingLevel } from "../agent/thinking.ts";
 import {
-  addTurnUsage,
-  emptySnapshot,
   isBudgetExceeded,
   recordRun,
   sessionCostSummary,
-  snapshotDelta,
-  snapshotMax,
-  type CostSnapshot,
 } from "../cost/ledger.ts";
-
-function snapshot(session: { getSessionStats(): { cost: number; tokens: { input: number; output: number; cacheRead: number; total: number } } }): CostSnapshot {
-  const s = session.getSessionStats();
-  return {
-    costUsd: s.cost,
-    input: s.tokens.input,
-    output: s.tokens.output,
-    cacheRead: s.tokens.cacheRead,
-    total: s.tokens.total,
-  };
-}
 
 interface RunBody {
   message?: string;
   model?: string;
   thinkingLevel?: string;
-  /** Full OpenRouter Fusion request body for a "fusion/<id>" model selection. */
-  fusionConfig?: Record<string, unknown>;
   /** Default Modal compute instance id for `modal_run` this run ("local" / unset = none). */
   computeTarget?: string;
   /** Inline image attachments (base64 + mime type); ride the user message as image blocks. */
   images?: unknown;
 }
 
-// Sessions with a run in flight, claimed synchronously. `session.isStreaming`
-// flips true only after awaits inside prompt(), so concurrent POSTs could
-// otherwise both pass the guard and the loser's close handler would abort the
-// winner's live turn.
+// Sessions with a run in flight, claimed synchronously.
 const activeRuns = new Set<string>();
 
 export async function registerSessionRoutes(app: FastifyInstance): Promise<void> {
   app.post("/sessions", async () => {
-    const session = await createSession(currentProjectId(), activePaths());
-    return { id: session.sessionId, sessionFile: session.sessionFile };
+    const manifest = createSession(currentProjectId(), activePaths());
+    return { id: manifest.id };
   });
 
   app.get("/sessions", async () => {
-    const infos = await listSessions(activePaths());
-    return infos.map((i) => ({
-      id: i.id,
-      name: i.name ?? null,
-      created: i.created,
-      modified: i.modified,
-      messageCount: i.messageCount,
-      firstMessage: i.firstMessage,
-    }));
+    const manifests = listSessions(activePaths());
+    return manifests.map((m) => {
+      const last = m.generations.at(-1);
+      return {
+        id: m.id,
+        name: null,
+        created: m.createdAt,
+        modified: m.updatedAt,
+        model: last?.model ?? null,
+      };
+    });
   });
 
   // Full transcript of a stored session, replayed as client frames so the UI
@@ -108,12 +97,11 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   app.get<{ Params: { id: string } }>("/sessions/:id/history", async (req, reply) => {
     try {
       const paths = activePaths();
-      const file = findSessionFile(paths, req.params.id);
-      if (!file) {
+      if (!getManifest(paths, req.params.id)) {
         reply.code(404);
         return { detail: "No such session" };
       }
-      return { messages: toHistory(file, paths.sandbox) };
+      return { messages: await toHistory(paths, req.params.id) };
     } catch (err) {
       reply.code(400);
       return { detail: (err as Error).message };
@@ -250,22 +238,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   );
 
   // Reproducibility export: a runnable shell script (?format=sh) or a markdown
-  // lab notebook (?format=md) reconstructed from the Pi session log.
+  // lab notebook (?format=md) reconstructed from the stored dsh transcript(s).
   app.get<{ Params: { id: string }; Querystring: { format?: string } }>(
     "/sessions/:id/export",
     async (req, reply) => {
       try {
         const format = req.query.format === "md" ? "md" : "sh";
         const paths = activePaths();
-        const file = findSessionFile(paths, req.params.id);
-        if (!file) {
+        if (!getManifest(paths, req.params.id)) {
           reply.code(404);
           return { detail: "No such session" };
         }
         const body =
           format === "md"
-            ? toNotebook(file, req.params.id, paths.sandbox)
-            : toShellScript(file, req.params.id, paths.sandbox);
+            ? await toNotebook(paths, req.params.id)
+            : await toShellScript(paths, req.params.id);
         const ext = format === "md" ? "md" : "sh";
         reply.type(format === "md" ? "text/markdown" : "text/x-shellscript");
         reply.header(
@@ -284,6 +271,10 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   // form is dismissed). 404 = nothing waiting (answered, timed out, aborted);
   // 400 = fixable submission problem — the pending interview is NOT consumed,
   // so the form can correct and resubmit.
+  //
+  // NOTE: the `interview` model-facing tool itself is not yet wired into the
+  // dsh agent (see interview.ts's TODO(#20)) — these endpoints are ready but
+  // nothing will populate `pending` until that lands.
   app.post<{ Params: { id: string; toolCallId: string }; Body: InterviewAnswer }>(
     "/sessions/:id/interview/:toolCallId",
     async (req, reply) => {
@@ -316,26 +307,23 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   });
 
   app.post<{ Params: { id: string } }>("/sessions/:id/abort", async (req) => {
-    const session = await getSession(currentProjectId(), activePaths(), req.params.id);
-    if (!session) return { ok: true, restored: [] };
-    // Clear BEFORE abort so a pending steer can't be delivered into the
-    // dying loop; the texts go back to the composer client-side.
-    const cleared = session.clearQueue();
-    await session.abort();
-    return { ok: true, restored: [...cleared.steering, ...cleared.followUp] };
+    const projectId = currentProjectId();
+    await abortSession(projectId, activePaths(), req.params.id);
+    return { ok: true, restored: [] };
   });
 
-  // Steering side-channel: queue a message into the LIVE run (delivered by Pi
-  // after the current tool calls, before the next LLM call). Never creates a
-  // run or an SSE stream — the /run stream carries the delivery + queue_update
-  // frames. 409 reason "not_streaming" tells the client to fall back to a
-  // normal run.
+  // Steering side-channel: queue a message into the LIVE run. dsh's
+  // `session/prompt` unconditionally calls the agent's `followup()` — even
+  // mid-turn — so a steer here is delivered the same way a run-triggering
+  // prompt is; there is no separate "queue preview" the way Pi's
+  // `queue_update` frames gave. 409 reason "not_streaming" tells the client
+  // to fall back to a normal run.
   app.post<{ Params: { id: string }; Body: { message?: string } }>(
     "/sessions/:id/steer",
     async (req, reply) => {
       const projectId = currentProjectId();
-      const session = await getSession(projectId, activePaths(), req.params.id);
-      if (!session) {
+      const paths = activePaths();
+      if (!getManifest(paths, req.params.id)) {
         reply.code(404);
         return { detail: "No such session" };
       }
@@ -344,12 +332,11 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         reply.code(400);
         return { detail: "message is required" };
       }
-      if (!session.isStreaming) {
+      const runKey = `${projectId}:${req.params.id}`;
+      if (!activeRuns.has(runKey)) {
         reply.code(409);
         return { detail: "No run in flight", reason: "not_streaming" };
       }
-      // A steer extends a live run's spend past what the run-start check
-      // gated, so re-check the cap here.
       const budget = isBudgetExceeded(projectId);
       if (budget.exceeded) {
         reply.code(403);
@@ -360,15 +347,13 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           reason: "budget",
         };
       }
-      await session.steer(message);
-      // The run can end between the guard and the queue write; a steer left
-      // behind would silently deliver into the NEXT run, so pull it back out.
-      if (!session.isStreaming) {
-        session.clearQueue();
+      const { runtime, dshSessionId } = await getOrSpawnRuntime(projectId, paths, req.params.id, undefined);
+      if (!activeRuns.has(runKey)) {
         reply.code(409);
         return { detail: "Run ended before the message was delivered", reason: "not_streaming" };
       }
-      return { ok: true, pending: [...session.getSteeringMessages()] };
+      await runtime.run(message, { sessionId: dshSessionId });
+      return { ok: true, pending: [] };
     },
   );
 
@@ -377,17 +362,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     async (req, reply) => {
       const projectId = currentProjectId();
       const paths = activePaths();
-      const session = await getSession(projectId, paths, req.params.id);
-      if (!session) {
+      if (!getManifest(paths, req.params.id)) {
         reply.code(404);
         return { detail: "No such session" };
       }
-      // One run at a time per session. The frontend blocks sending while a tab
-      // is streaming, so this is a guard against races/double-submits rather
-      // than a normal path. (Pi's followUp queueing returns immediately, which
-      // would orphan the SSE stream and abort the live turn — so we reject.)
       const runKey = `${projectId}:${req.params.id}`;
-      if (session.isStreaming || activeRuns.has(runKey)) {
+      if (activeRuns.has(runKey)) {
         reply.code(409);
         return { detail: "Session is already streaming a response" };
       }
@@ -404,6 +384,10 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
             "Model endpoint is not configured. Open Settings → API keys and set Base URL, API key, and Model name.",
         };
       }
+      if (body.model?.startsWith("fusion/")) {
+        reply.code(400);
+        return { detail: "OpenRouter Fusion is not supported. Configure a single model under Settings → API keys." };
+      }
       const parsedImages = parseRunImages(body.images);
       if ("error" in parsedImages) {
         reply.code(400);
@@ -411,71 +395,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       }
       // No awaits between the guard above and this claim, so it is atomic.
       activeRuns.add(runKey);
-      // One id per run invocation; notebook entries appended during this run
-      // (lead tool + subagent harvest) are stamped with it. Cleared in the
-      // outer finally so it covers every exit path.
       const runId = mintRunId();
-      setSessionRunId(session.sessionId, runId);
-      // For a Fusion run we disable Pi's local tools for the turn (see below).
-      // Remember the real active set so we can restore it in the finally; `null`
-      // means "not a fusion run, nothing to restore".
-      let savedToolNames: string[] | null = null;
+      setSessionRunId(req.params.id, runId);
+
       try {
-        // Stash this run's selected compute instance so the modal_run tool uses
-        // it as the default when the agent doesn't name one ("local"/unset clears it).
-        setSessionComputeTarget(session.sessionId, body.computeTarget ?? null);
-        const isFusion = Boolean(body.model && body.model.startsWith("fusion/"));
-        if (isFusion) {
-          // Fusion is load-bearing for the spend cap: the cost-bearing Model
-          // (priced from the panel sum) and the body-rewrite must be applied
-          // together for THIS run. If resolution fails (e.g. catalogue priced
-          // no panel model), do NOT swallow it and run at the prior model's
-          // cost — abort, since the body would still be rewritten to fusion.
-          try {
-            await session.setModel(
-              resolveModel(body.model, getModelRegistry(), body.fusionConfig),
-            );
-            setFusionConfig(session.sessionId, body.fusionConfig ?? null);
-            // Disable Pi's local agentic tools for this turn so OpenRouter Fusion
-            // runs deterministically. Stripping `tools` from the wire body (in
-            // fusion-bridge's before_provider_request) is NOT enough: Pi executes
-            // any tool_call the model returns by name-matching against the live
-            // tool registry (agent.state.tools / the loop's context.tools
-            // snapshot), independent of what the HTTP body advertised. With the
-            // registry non-empty, the model is still offered ls/read/etc. and any
-            // returned tool_call still executes — so the agent keeps looping
-            // instead of producing the single fused answer. setActiveToolsByName
-            // is the supported API: it empties agent.state.tools (so the loop's
-            // snapshot carries no tools and any stray tool_call resolves to "not
-            // found") AND rebuilds the system prompt without tool guidelines.
-            // Restored in the finally so non-fusion runs keep all tools.
-            savedToolNames = session.getActiveToolNames();
-            session.setActiveToolsByName([]);
-          } catch (err) {
-            // Make sure no stale fusion config rewrites this run's body.
-            // (The outer finally releases the activeRuns claim on return.)
-            setFusionConfig(session.sessionId, null);
-            reply.code(400);
-            return {
-              detail: `Fusion model could not be prepared: ${(err as Error).message}`,
-            };
-          }
-        } else {
-          // Non-fusion run: clear any fusion config so the extension passes the
-          // payload through untouched.
-          setFusionConfig(session.sessionId, null);
-          if (body.model) {
-            try {
-              await session.setModel(resolveModel(body.model, getModelRegistry()));
-            } catch (err) {
-              req.log.warn({ err }, "setModel failed; keeping current model");
-            }
-          }
-        }
-        if (body.thinkingLevel !== undefined) {
-          const level = parseThinkingLevel(body.thinkingLevel);
-          if (level) session.setThinkingLevel(level);
-          else req.log.warn({ thinkingLevel: body.thinkingLevel }, "ignoring invalid thinkingLevel");
+        if (body.thinkingLevel !== undefined && parseThinkingLevel(body.thinkingLevel) === undefined) {
+          req.log.warn({ thinkingLevel: body.thinkingLevel }, "ignoring invalid thinkingLevel");
         }
 
         // Take over the socket for Server-Sent Events.
@@ -491,9 +416,6 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         const write = (frame: ClientFrame) => {
           if (!raw.writableEnded) raw.write(`data: ${JSON.stringify(frame)}\n\n`);
         };
-        // Synthetic route-level frame (Pi events carry no run id): lets the
-        // client stamp provisional notebook entries with this run before the
-        // authoritative refetch.
         write({ type: "run_start", runId });
 
         // Hard budget cap: refuse to run if the project has reached its limit.
@@ -512,81 +434,69 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           return;
         }
 
-        const sandboxRoot = activePaths().sandbox;
-        // Usage tallied straight from turn_end events. getSessionStats() is
-        // recomputed from the in-context messages, so auto-compaction mid-run
-        // can shrink the cumulative stats and make the before/after delta lie
-        // low; the per-turn events are immune to that.
-        const turnTally = emptySnapshot();
-        const unsub = session.subscribe((ev) => {
-          if (ev.type === "turn_end") {
-            const usage = (ev.message as { usage?: Parameters<typeof addTurnUsage>[1] }).usage;
-            if (usage) addTurnUsage(turnTally, usage);
-          }
-          const frame = toClientFrame(ev, sandboxRoot);
-          if (frame) write(frame);
-        });
+        const modelId = resolveModelId(body.model);
+        // A live runtime with a different model can't switch in place (the
+        // wire protocol fixes provider/model for a runtime's whole process
+        // lifetime) — getOrSpawnRuntime respawns a new generation when stale.
+        if (isStale(projectId, req.params.id, modelId)) {
+          req.log.info({ sessionId: req.params.id, model: modelId }, "model changed; respawning runtime");
+        }
+        const { runtime, dshSessionId } = await getOrSpawnRuntime(projectId, paths, req.params.id, modelId);
 
-        req.raw.on("close", () => {
-          if (session.isStreaming) session.abort().catch(() => {});
-        });
+        const abortController = new AbortController();
+        req.raw.on("close", () => abortController.abort());
 
-        // errorMessage is sticky on the session; only report it if THIS run set it.
-        const priorError = session.state.errorMessage;
-        const before = snapshot(session);
+        const mapper = createFrameMapper(paths.sandbox);
+        let result;
         try {
-          await session.prompt(
-            body.message ?? "",
-            parsedImages.images.length > 0 ? { images: parsedImages.images } : undefined,
-          );
-          // Surface a provider/agent error that didn't already stream as a frame
-          // (e.g. an auth failure that produced an empty assistant turn).
-          const errorMessage = session.state.errorMessage;
-          if (errorMessage && errorMessage !== priorError) {
-            write({ type: "error", message: errorMessage });
-          }
+          result = await runtime.run(body.message, {
+            sessionId: dshSessionId,
+            signal: abortController.signal,
+            onNotification: (n) => {
+              if (n.method !== "session.event") return;
+              const event = (n.params as { event?: unknown }).event;
+              if (!event || typeof event !== "object") return;
+              const frame = mapper.toClientFrame(event as Parameters<typeof mapper.toClientFrame>[0]);
+              if (frame) write(frame);
+            },
+          });
         } catch (err) {
           write({ type: "error", message: (err as Error).message });
-        } finally {
-          unsub();
-          // Ledger in the finally: a run that threw mid-turn still spent real
-          // tokens. The stats delta catches a partial turn that never reached
-          // turn_end; the tally catches compaction — take the max of the two.
-          try {
-            const run = snapshotMax(snapshotDelta(before, snapshot(session)), turnTally);
-            recordRun({
-              sessionId: req.params.id,
-              projectId,
-              model: session.model?.id ?? "unknown",
-              before: emptySnapshot(),
-              after: run,
-            });
-            const stats = session.getSessionStats();
-            // `cost` is the session's full ledgered spend (subagents included,
-            // restart/compaction-proof); `tokens` is Pi's in-context cumulative;
-            // `runCost`/`runTokens` are the delta for THIS turn, so the UI can
-            // attribute a price to the message that just completed.
-            write({
-              type: "cost",
-              cost: sessionCostSummary(req.params.id, projectId).totalUsd,
-              tokens: stats.tokens,
-              runCost: run.costUsd,
-              runTokens: run.total,
-            });
-            write({ type: "done" });
-          } catch (err) {
-            req.log.warn({ err }, "failed to ledger run cost");
-          }
-          if (!raw.writableEnded) raw.end();
+          result = null;
         }
+
+        try {
+          const usage = result?.usage;
+          const run = {
+            costUsd: 0,
+            input: usage?.inputTokens ?? 0,
+            output: usage?.outputTokens ?? 0,
+            cacheRead: 0,
+            total: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
+          };
+          recordRun({
+            sessionId: req.params.id,
+            projectId,
+            model: modelId,
+            role: "agent",
+            before: { costUsd: 0, input: 0, output: 0, cacheRead: 0, total: 0 },
+            after: run,
+          });
+          const summary = sessionCostSummary(req.params.id, projectId);
+          write({
+            type: "cost",
+            cost: summary.totalUsd,
+            tokens: { input: run.input, output: run.output, cacheRead: 0, total: run.total },
+            runCost: run.costUsd,
+            runTokens: run.total,
+          });
+          write({ type: "done" });
+        } catch (err) {
+          req.log.warn({ err }, "failed to ledger run cost");
+        }
+        if (!raw.writableEnded) raw.end();
       } finally {
-        // Restore the local tool set disabled for a fusion run (covers every
-        // exit path, including early returns like the budget cap). No-op for
-        // non-fusion runs (savedToolNames stays null).
-        if (savedToolNames !== null) {
-          session.setActiveToolsByName(savedToolNames);
-        }
-        setSessionRunId(session.sessionId, null);
+        setSessionRunId(req.params.id, null);
         activeRuns.delete(runKey);
       }
     },

@@ -1,0 +1,62 @@
+{
+  "name": "@deepseek-ai/dsh-sdk-jsonrpc-server",
+  "description": "Stdio JSON-RPC server plugin for out-of-process DeepSeek Harness SDK clients",
+  "version": "0.1.0-rc.5",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/sdk/server"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "file:../schemastery"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-llm": "file:../dsh-llm",
+    "@deepseek-ai/dsh-llm-deepseek": "file:../dsh-llm-deepseek",
+    "@deepseek-ai/dsh-scope": "file:../dsh-scope",
+    "@deepseek-ai/dsh-sdk-protocol": "file:../dsh-sdk-protocol",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-subagent": "file:../dsh-subagent",
+    "@deepseek-ai/cordis": "file:../cordis"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis-plugin-loader": "file:../cordis-plugin-loader",
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-agent-spine-demo": "file:../dsh-agent-spine-demo",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-llm": "file:../dsh-llm",
+    "@deepseek-ai/dsh-llm-deepseek": "file:../dsh-llm-deepseek",
+    "@deepseek-ai/dsh-scope": "file:../dsh-scope",
+    "@deepseek-ai/dsh-sdk-protocol": "file:../dsh-sdk-protocol",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "file:../dsh-session-persistence-jsonl",
+    "@deepseek-ai/dsh-subagent": "file:../dsh-subagent",
+    "@deepseek-ai/cordis": "file:../cordis"
+  }
+}

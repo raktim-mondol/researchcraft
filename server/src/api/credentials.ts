@@ -25,8 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { REPO_ROOT } from "../config.ts";
-import { getAuthStorage } from "../agent/session-registry.ts";
-import { getLlmConfig, LLM_PROVIDER, setupAuth } from "../agent/models.ts";
+import { getLlmConfig } from "../agent/models.ts";
 
 const ENV_PATH = path.join(REPO_ROOT, ".env");
 
@@ -54,14 +53,10 @@ const MANAGED_KEYS: ManagedKey[] = [
     envVar: "LLM_API_KEY",
     // Legacy OpenRouter key names — still read, cleared when LLM key is cleared.
     envAliases: ["OPENROUTER_API_KEY", "OR_API_KEY"],
-    onChange: () => {
-      // Re-sync AuthStorage + OPENROUTER_* mirrors from the full LLM config.
-      try {
-        setupAuth(getAuthStorage());
-      } catch {
-        /* AuthStorage may reject empty; status still reflects env */
-      }
-    },
+    // No resync hook needed: dsh runtimes read env fresh on every spawn
+    // (getLlmConfig() below), and session-registry.ts respawns on model/route
+    // drift — there's no in-process credential store to poke, unlike Pi's
+    // AuthStorage singleton.
   },
   {
     id: "llmBaseUrl",
@@ -70,13 +65,6 @@ const MANAGED_KEYS: ManagedKey[] = [
     envAliases: ["OPENROUTER_BASE_URL"],
     allowShort: true,
     isPlainText: true,
-    onChange: () => {
-      try {
-        setupAuth(getAuthStorage());
-      } catch {
-        /* ignore */
-      }
-    },
   },
   {
     id: "llmModel",
@@ -224,13 +212,6 @@ export async function registerCredentialRoutes(app: FastifyInstance): Promise<vo
           return { detail: error };
         }
       }
-      // Ensure AuthStorage always reflects the latest LLM key after a batch put.
-      try {
-        setupAuth(getAuthStorage());
-      } catch {
-        /* ignore */
-      }
-      void LLM_PROVIDER; // keep import used for clarity
       return status();
     },
   );

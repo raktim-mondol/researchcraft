@@ -5,8 +5,7 @@
  * session id "latex-assist" so project cost summaries include it.
  */
 import { complete, type AssistantMessage, type Context } from "@earendil-works/pi-ai";
-import { getModelRegistry } from "../agent/session-registry.ts";
-import { llmApiKey, resolveModel } from "../agent/models.ts";
+import { buildOneShotModel, llmApiKey } from "../agent/models.ts";
 import { emptySnapshot, isBudgetExceeded, recordRun } from "../cost/ledger.ts";
 
 export const ASSIST_SESSION_ID = "latex-assist";
@@ -118,7 +117,7 @@ export async function runLatexAssist(
   if (req.model?.startsWith("fusion/")) {
     throw new AssistError(422, "Fusion models are not supported for editor AI assist");
   }
-  const model = resolveModel(req.model, getModelRegistry());
+  const model = buildOneShotModel(req.model);
   let msg: AssistantMessage;
   try {
     msg = await completeFn(model, buildAssistContext(req), {

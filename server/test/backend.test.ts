@@ -22,16 +22,9 @@ import {
   snapshotDelta,
   snapshotMax,
 } from "../src/cost/ledger.ts";
-import { usageFromSessionFile } from "../src/agent/subagent-bridge.ts";
-import {
-  WEB_ACCESS_TOOLS,
-  seedWebAccessPackage,
-  trustSandbox,
-  webAccessPackageDir,
-} from "../src/agent/web-access-bridge.ts";
 import { guessMime, isUserVisible } from "../src/sandbox-fs.ts";
 import { listProjectSkills, seedProjectSkills } from "../src/agent/skills.ts";
-import { toClientFrame, relativizeSandboxPaths } from "../src/agent/events.ts";
+import { createFrameMapper, relativizeSandboxPaths } from "../src/agent/events.ts";
 import { helperPython, HELPERS_DIR } from "../src/helpers-env.ts";
 import { sciHelperFor } from "../src/api/sci-helpers.ts";
 
@@ -175,36 +168,6 @@ describe("cost ledger + budget", () => {
     expect(run.total).toBe(50);
   });
 
-  it("sums assistant usage from a child Pi session file", () => {
-    const dir = path.join(PROJECTS_ROOT, "tmp-subagent");
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, "child-session.jsonl");
-    const lines = [
-      JSON.stringify({ type: "session", id: "child" }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          usage: { input: 100, output: 40, cacheRead: 20, cacheWrite: 5, cost: { total: 0.03 } },
-        },
-      }),
-      JSON.stringify({ message: { role: "user", content: "hi" } }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, cost: { total: 0.05 } },
-        },
-      }),
-      "{not json",
-    ];
-    fs.writeFileSync(file, lines.join("\n") + "\n", "utf-8");
-
-    const usage = usageFromSessionFile(file);
-    expect(usage).not.toBeNull();
-    expect(usage!.cost).toBeCloseTo(0.08);
-    expect(usage!.tokens).toEqual({ input: 300, output: 100, cacheRead: 20, total: 425 });
-
-    expect(usageFromSessionFile(path.join(dir, "missing.jsonl"))).toBeNull();
-  });
 });
 
 describe("sandbox-fs", () => {
@@ -255,158 +218,83 @@ describe("skills", () => {
 });
 
 describe("events → client frames", () => {
-  it("maps text/thinking deltas and tool/lifecycle events", () => {
-    expect(toClientFrame({ type: "agent_start" } as never)).toEqual({ type: "agent_start" });
+  const dshEvent = <T extends string>(type: T, data: unknown) =>
+    ({ type, seq: 0, time: Date.now(), data } as never);
+
+  it("maps text/thinking deltas and tool call/result events", () => {
+    const mapper = createFrameMapper();
+    expect(mapper.toClientFrame(dshEvent("turn/start", { turn: 1 }))).toEqual({ type: "turn_start" });
     expect(
-      toClientFrame({
-        type: "message_update",
-        message: {} as never,
-        assistantMessageEvent: { type: "text_delta", delta: "hi" } as never,
-      } as never),
+      mapper.toClientFrame(
+        dshEvent("assistant/chunk", { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "hi" } }),
+      ),
     ).toEqual({ type: "text_delta", delta: "hi" });
     expect(
-      toClientFrame({
-        type: "tool_execution_start",
-        toolCallId: "t1",
-        toolName: "bash",
-        args: {},
-      } as never),
-    ).toMatchObject({ type: "tool_start", toolName: "bash" });
-    // Unmapped internal event → null
-    expect(toClientFrame({ type: "session_info_changed", name: "x" } as never)).toBeNull();
+      mapper.toClientFrame(
+        dshEvent("assistant/chunk", { turn: 1, step: 1, chunk: { type: "reasoning-delta", index: 0, text: "thinking" } }),
+      ),
+    ).toEqual({ type: "thinking_delta", delta: "thinking" });
+    expect(
+      mapper.toClientFrame(
+        dshEvent("tool/call", { turn: 1, step: 1, callId: "t1", name: "bash", arguments: "{}" }),
+      ),
+    ).toMatchObject({ type: "tool_start", toolName: "bash", toolCallId: "t1" });
+    // Unmapped/log-only event → null
+    expect(mapper.toClientFrame(dshEvent("session/end-seed", {}))).toBeNull();
+  });
+
+  it("correlates tool/result with its tool/call by callId to recover the tool name", () => {
+    const mapper = createFrameMapper();
+    mapper.toClientFrame(
+      dshEvent("tool/call", { turn: 1, step: 1, callId: "t1", name: "write", arguments: "{}" }),
+    );
+    const frame = mapper.toClientFrame(
+      dshEvent("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          content: [{ type: "tool-result", toolCallId: "t1", content: [{ type: "text", text: "ok" }], isError: false }],
+        },
+      }),
+    );
+    expect(frame).toMatchObject({ type: "tool_end", toolCallId: "t1", toolName: "write", isError: false, result: "ok" });
   });
 
   it("relativizes absolute sandbox paths in tool args", () => {
     const root = "/Users/x/projects/p/sandbox";
-    // Exact path field → bare relative path.
     expect(relativizeSandboxPaths({ path: `${root}/de_analysis.py` }, root)).toEqual({
       path: "de_analysis.py",
     });
-    // Nested folder under sandbox stays relative.
     expect(relativizeSandboxPaths(`${root}/user_data/x.csv`, root)).toBe("user_data/x.csv");
-    // Embedded in a bash command → collapsed to ".".
     expect(
       relativizeSandboxPaths(`cd ${root} && uv run python de_analysis.py`, root),
     ).toBe("cd . && uv run python de_analysis.py");
-    // Paths outside the sandbox are untouched; empty root is a no-op.
     expect(relativizeSandboxPaths("/etc/hosts", root)).toBe("/etc/hosts");
     expect(relativizeSandboxPaths(`${root}/a.py`, "")).toBe(`${root}/a.py`);
   });
 
   it("strips sandbox paths in the streamed tool_start frame", () => {
     const root = "/Users/x/projects/p/sandbox";
-    const frame = toClientFrame(
-      {
-        type: "tool_execution_start",
-        toolCallId: "t1",
-        toolName: "write",
-        args: { path: `${root}/notes.md` },
-      } as never,
-      root,
+    const mapper = createFrameMapper(root);
+    const frame = mapper.toClientFrame(
+      dshEvent("tool/call", {
+        turn: 1,
+        step: 1,
+        callId: "t1",
+        name: "write",
+        arguments: JSON.stringify({ path: `${root}/notes.md` }),
+      }),
     );
     expect(frame).toMatchObject({ type: "tool_start", args: { path: "notes.md" } });
   });
 
-  it("includes content on user message_start (string and content-array forms)", () => {
+  it("includes content on a user/message event", () => {
+    const mapper = createFrameMapper();
     expect(
-      toClientFrame({
-        type: "message_start",
-        message: { role: "user", content: "exclude sample 7" },
-      } as never),
+      mapper.toClientFrame(
+        dshEvent("user/message", { role: "user", content: [{ type: "text", text: "exclude sample 7" }] }),
+      ),
     ).toEqual({ type: "message_start", role: "user", content: "exclude sample 7" });
-
-    expect(
-      toClientFrame({
-        type: "message_start",
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: "look at" },
-            { type: "image", data: "…", mimeType: "image/png" },
-            { type: "text", text: "plot.png" },
-          ],
-        },
-      } as never),
-    ).toEqual({ type: "message_start", role: "user", content: "look at\nplot.png" });
-  });
-
-  it("omits content on assistant message_start", () => {
-    expect(
-      toClientFrame({
-        type: "message_start",
-        message: { role: "assistant", content: "internal" },
-      } as never),
-    ).toEqual({ type: "message_start", role: "assistant" });
-  });
-});
-
-describe("web access bridge", () => {
-  const settingsPath = (sandbox: string) => path.join(sandbox, ".pi", "settings.json");
-  const readSettings = (sandbox: string) =>
-    JSON.parse(fs.readFileSync(settingsPath(sandbox), "utf-8")) as {
-      packages?: string[];
-      [k: string]: unknown;
-    };
-
-  it("exposes the pi-web-access tool names", () => {
-    expect(WEB_ACCESS_TOOLS).toEqual([
-      "web_search",
-      "code_search",
-      "fetch_content",
-      "get_search_content",
-    ]);
-    expect(fs.existsSync(path.join(webAccessPackageDir(), "index.ts"))).toBe(true);
-  });
-
-  it("seeds the package reference into project settings, idempotently", () => {
-    const paths = ensureProjectExists("default");
-    expect(seedWebAccessPackage(paths)).toBe(true);
-    expect(readSettings(paths.sandbox).packages).toEqual([webAccessPackageDir()]);
-    // Second call is a no-op.
-    expect(seedWebAccessPackage(paths)).toBe(false);
-    expect(readSettings(paths.sandbox).packages).toEqual([webAccessPackageDir()]);
-  });
-
-  it("preserves existing settings and repairs stale references", () => {
-    const paths = ensureProjectExists("default");
-    fs.mkdirSync(path.dirname(settingsPath(paths.sandbox)), { recursive: true });
-    fs.writeFileSync(
-      settingsPath(paths.sandbox),
-      JSON.stringify({
-        theme: "dark",
-        packages: ["npm:some-other-package", "/old/location/node_modules/pi-web-access"],
-      }),
-      "utf-8",
-    );
-    expect(seedWebAccessPackage(paths)).toBe(true);
-    const settings = readSettings(paths.sandbox);
-    expect(settings.theme).toBe("dark");
-    expect(settings.packages).toEqual(["npm:some-other-package", webAccessPackageDir()]);
-  });
-
-  it("leaves an unparseable settings file untouched", () => {
-    const paths = ensureProjectExists("default");
-    fs.mkdirSync(path.dirname(settingsPath(paths.sandbox)), { recursive: true });
-    fs.writeFileSync(settingsPath(paths.sandbox), "{not json", "utf-8");
-    expect(seedWebAccessPackage(paths)).toBe(false);
-    expect(fs.readFileSync(settingsPath(paths.sandbox), "utf-8")).toBe("{not json");
-  });
-
-  it("pre-trusts the sandbox without overriding an explicit distrust", () => {
-    const paths = ensureProjectExists("default");
-    const agentDir = path.join(PROJECTS_ROOT, "fake-agent-dir");
-    trustSandbox(paths, agentDir);
-    const trustFile = path.join(agentDir, "trust.json");
-    const trusted = JSON.parse(fs.readFileSync(trustFile, "utf-8")) as Record<string, boolean>;
-    expect(Object.values(trusted)).toEqual([true]);
-
-    // A user's explicit "no" sticks.
-    const key = Object.keys(trusted)[0];
-    fs.writeFileSync(trustFile, JSON.stringify({ [key]: false }), "utf-8");
-    trustSandbox(paths, agentDir);
-    expect(
-      (JSON.parse(fs.readFileSync(trustFile, "utf-8")) as Record<string, boolean>)[key],
-    ).toBe(false);
   });
 });
 

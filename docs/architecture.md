@@ -11,16 +11,18 @@ The start script (`start.sh` on macOS/Linux, `start.cmd` on Windows — both thi
 | Service | Port | What it does |
 |---------|------|--------------|
 | **Frontend** (Next.js) | 3000 | The web interface in your browser - chat, file browser, and file previews |
-| **Backend** (TypeScript + Pi SDK) | 8000 | The "brain" - runs ResearchCraft (a single Pi agent), manages your sandbox, files, sessions, and cost ledger |
+| **Backend** (TypeScript + DeepSeek Harness) | 8000 | The "brain" - runs ResearchCraft (a single agent), manages your sandbox, files, sessions, and cost ledger |
 
-The backend embeds the [Pi coding-agent SDK](https://pi.dev) and runs **one flat agent** with built-in file/shell tools plus a `subagent` delegation tool (the [pi-subagents](https://github.com/nicobailon/pi-subagents) extension — see [Sub-agents](./sub-agents.md)) and any external tools you've connected via [MCP servers](./mcp-servers.md). Model calls go directly to **OpenRouter** (built-in Pi provider) or **Ollama** (local) — there is no separate proxy.
+The backend drives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) ("dsh") — a subprocess per chat tab, spoken to over JSON-RPC — running **one flat agent** with built-in file/shell tools plus one delegation tool per named scientific specialist (see [Sub-agents](./sub-agents.md)) and any external tools you've connected via [MCP servers](./mcp-servers.md). Model calls go directly to **any OpenAI-compatible endpoint** — OpenRouter, a local Ollama daemon, or another compatible gateway — there is no separate proxy.
 
 When you send a message:
 
 1. The frontend POSTs to the backend, tagged with the project id (`X-Project-Id`) and the chat tab's session id.
-2. The backend runs the Pi agent for that session; the agent uses its tools and may delegate to sub-agents (each sub-agent runs as its own short-lived `pi` process in the same sandbox, with its spend counted toward the project budget).
-3. Model calls go straight to OpenRouter or Ollama.
+2. The backend runs the dsh agent for that session; the agent uses its tools and may delegate to sub-agents (in-process children of the same runtime, not separate processes — their spend still counts toward the project budget).
+3. Model calls go straight to your configured endpoint.
 4. Events (text, tool calls, cost) stream back to your browser over SSE in real time.
+
+Two real limits come from dsh's current subprocess protocol rather than being product choices: aborting a run closes and respawns the whole subprocess (no per-turn cancel), and a subprocess can't resume a prior conversation's model memory across a restart, abort, or model change — though the transcript itself stays readable (see "Chat tabs and sessions" below).
 
 ## Chat tabs and sessions
 
@@ -32,7 +34,7 @@ project.
 
 What a tab owns (per-tab):
 
-- Message history (a Pi JSONL session file under `projects/<project>/sandbox/.pi/sessions/`).
+- Message history: dsh writes its own durable JSONL transcript under `projects/<project>/sandbox/.dsh/sessions/`, one file per "generation" (a fresh subprocess spawn — a manifest at `sandbox/.kady/dsh-sessions/<id>.json` tracks the sequence). Reopening a session replays every generation's transcript, but a new generation's model has no memory of the earlier ones.
 - The selected model.
 - Attached files for the next message and the queued-message buffer.
 - Cost ledger (`projects/<project>/sandbox/.kady/runs/<sessionId>/costs.jsonl`).
@@ -60,7 +62,7 @@ The first time you start the app (`./start.sh` or `start.cmd`), it will automati
 - Install backend dependencies (`server/`) and frontend dependencies (`web/`)
 - Install [uv](https://docs.astral.sh/uv/) if missing - the Python manager ResearchCraft uses to run analyses in each sandbox
 - Create your `.env` from `.env.example` if you haven't yet, and warn if no API key (or local Ollama) is configured
-- Download the scientific skills catalogue into each project's `sandbox/.pi/skills/`
+- Download the scientific skills catalogue into each project's `sandbox/.pi/skills/` (the directory name is unchanged from the prior backend — it's a stable on-disk contract, not tied to which agent runtime reads it)
 
 Subsequent starts are much faster.
 
@@ -71,33 +73,42 @@ k-dense-byok/
 ├── start.mjs             ← The launcher that starts everything (cross-platform)
 ├── start.sh / start.cmd  ← Thin macOS-Linux / Windows wrappers around it
 ├── .env                  ← Your API keys (copy from .env.example; gitignored)
-├── server/               ← Backend (TypeScript, Pi SDK)
+├── server/               ← Backend (TypeScript, DeepSeek Harness)
 │   └── src/
 │       ├── index.ts          ← Fastify app, CORS, project-scope hook
 │       ├── projects.ts       ← Project registry + path resolution
-│       ├── agent/            ← Pi wiring: models, sessions, tools, events, skills
+│       ├── agent/            ← dsh wiring: models, session-registry, tools, events, skills
+│       ├── agent/dsh/        ← the ported dsh SDK layer (config, composition, HarnessRuntime)
 │       ├── api/              ← Routes: projects, sessions (SSE), sandbox, system
-│       └── cost/ledger.ts    ← Cost ledger + budget caps
+│       ├── cost/ledger.ts    ← Cost ledger + budget caps
+│       └── vendor/dsh/       ← Vendored dsh packages (pre-1.0, not on npm)
 ├── web/                  ← Frontend (the UI you see in your browser)
 ├── docs/                 ← Extended documentation (this folder)
 └── projects/             ← All user work, one subdirectory per named project
     ├── index.json        ← Project registry (names, tags, archived flag)
     └── default/          ← The "Default" project
         ├── project.json      ← Project metadata
-        └── sandbox/          ← Workspace (the Pi agent's cwd)
+        └── sandbox/          ← Workspace (every dsh runtime's cwd)
             ├── .pi/skills/        ← Per-project scientific skills
             ├── .pi/agents/        ← Sub-agent definitions (one .md per specialist)
             ├── .pi/mcp.json       ← MCP server connections for this project
-            ├── .pi/sessions/      ← Pi JSONL session files (one per chat tab)
-            └── .kady/runs/<sessionId>/costs.jsonl  ← Per-session cost ledger
+            ├── .dsh/sessions/     ← dsh's own JSONL session transcripts (one dir per generation)
+            └── .kady/
+                ├── dsh-sessions/<id>.json          ← per-tab generation manifest
+                └── runs/<sessionId>/costs.jsonl    ← Per-session cost ledger
 ```
 
 ## Model selection and routing
 
-Each chat tab picks one model. Model refs from the picker look like
-`openrouter/<vendor>/<model>` or `ollama/<name>`. The backend resolves these to
-Pi `Model` objects (`server/src/agent/models.ts`): OpenRouter is a built-in Pi
-provider (key from `OPENROUTER_API_KEY`), and Ollama points at your local daemon
-(`OLLAMA_BASE_URL`). There is no proxy — Pi calls the provider directly. See
+Each chat tab uses ResearchCraft's one configured OpenAI-compatible endpoint —
+`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (`server/src/agent/models.ts`),
+set under Settings → API keys. The backend wraps that endpoint as a single
+`dsh-llm-pi-ai` route (itself built on
+[`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai),
+kept as a direct dependency for one-shot completions like the LaTeX assistant).
+There is no proxy — dsh calls the endpoint directly. Because the wire protocol
+fixes a runtime subprocess's model for its whole lifetime, changing the model
+mid-conversation respawns a fresh subprocess (a new "generation" — see "Chat
+tabs and sessions" above) rather than switching live. See
 [Local models with Ollama](./local-models-ollama.md) and
 [Model selection](./model-selection.md).

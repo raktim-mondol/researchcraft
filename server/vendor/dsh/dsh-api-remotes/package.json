@@ -1,0 +1,96 @@
+{
+  "name": "@deepseek-ai/dsh-api-remotes",
+  "description": "Remote BFF assembly and Host Agent/Session lookup policy",
+  "version": "0.1.0-rc.5",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/api/remotes"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./types": {
+      "types": "./lib/types/types.d.ts",
+      "default": "./lib/types/types.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-gateway"
+      ],
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "scripts": {
+    "bundle": "tsdown",
+    "watch": "tsdown --watch"
+  },
+  "license": "MIT",
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/client.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "file:../dsh-typert-protocol"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "file:../cordis",
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-api-gateway": "file:../dsh-api-gateway",
+    "@deepseek-ai/dsh-commands": "file:../dsh-commands",
+    "@deepseek-ai/dsh-credentials": "file:../dsh-credentials",
+    "@deepseek-ai/dsh-goal": "file:../dsh-goal",
+    "@deepseek-ai/dsh-cordis-host-runner": "file:../dsh-cordis-host-runner",
+    "@deepseek-ai/dsh-host-plugin-inventory": "file:../dsh-host-plugin-inventory",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-agent-presets": "file:../dsh-agent-presets",
+    "@deepseek-ai/dsh-llm": "file:../dsh-llm",
+    "@deepseek-ai/dsh-message-feedback": "file:../dsh-message-feedback",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-persistence": "file:../dsh-session-persistence",
+    "@deepseek-ai/dsh-settings": "file:../dsh-settings",
+    "@deepseek-ai/dsh-typert-registry": "file:../dsh-typert-registry"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-api-gateway": "file:../dsh-api-gateway",
+    "@deepseek-ai/dsh-commands": "file:../dsh-commands",
+    "@deepseek-ai/dsh-credentials": "file:../dsh-credentials",
+    "@deepseek-ai/dsh-goal": "file:../dsh-goal",
+    "@deepseek-ai/dsh-cordis-host-runner": "file:../dsh-cordis-host-runner",
+    "@deepseek-ai/dsh-host-plugin-inventory": "file:../dsh-host-plugin-inventory",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-agent-presets": "file:../dsh-agent-presets",
+    "@deepseek-ai/dsh-llm": "file:../dsh-llm",
+    "@deepseek-ai/dsh-message-feedback": "file:../dsh-message-feedback",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-persistence": "file:../dsh-session-persistence",
+    "@deepseek-ai/dsh-settings": "file:../dsh-settings",
+    "@deepseek-ai/dsh-typert-registry": "file:../dsh-typert-registry",
+    "@deepseek-ai/cordis": "file:../cordis"
+  }
+}

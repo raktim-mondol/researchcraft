@@ -1,0 +1,71 @@
+{
+  "name": "@deepseek-ai/dsh-permission-presets",
+  "description": "User-facing permission presets (ctx.permissionPresets) for the DeepSeek Harness: one product-level Permissions select bundling the sandbox-mode and approval-policy knobs, written through to their own session events",
+  "version": "0.1.0-rc.5",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/interaction/permission-presets"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./types": {
+      "types": "./lib/types/types.d.ts",
+      "default": "./lib/types/types.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/types/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-shell": "file:../dsh-shell",
+    "@deepseek-ai/dsh-commands": "file:../dsh-commands",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-sandbox": "file:../dsh-sandbox",
+    "@deepseek-ai/dsh-sandbox-policy": "file:../dsh-sandbox-policy",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-projection": "file:../dsh-session-projection",
+    "@deepseek-ai/dsh-settings": "file:../dsh-settings",
+    "@deepseek-ai/dsh-user-approval": "file:../dsh-user-approval",
+    "@deepseek-ai/cordis": "file:../cordis"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "file:../schemastery",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-shell": "file:../dsh-shell",
+    "@deepseek-ai/dsh-commands": "file:../dsh-commands",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-sandbox": "file:../dsh-sandbox",
+    "@deepseek-ai/dsh-sandbox-policy": "file:../dsh-sandbox-policy",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-projection": "file:../dsh-session-projection",
+    "@deepseek-ai/dsh-settings": "file:../dsh-settings",
+    "@deepseek-ai/dsh-user-approval": "file:../dsh-user-approval",
+    "@deepseek-ai/cordis": "file:../cordis"
+  }
+}

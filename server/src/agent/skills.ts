@@ -1,10 +1,15 @@
 /**
  * Per-project skill seeding + listing.
  *
- * Skills are placed in `<sandbox>/.pi/skills/` so Pi's DefaultResourceLoader
- * (cwd = sandbox) auto-discovers and the agent activates them natively — no
- * orchestrator passthrough. The catalogue is the same ResearchCraft repo as before,
- * and the SKILL.md format is unchanged (Pi-compatible).
+ * Skills are placed in `<sandbox>/.pi/skills/`. The directory convention is
+ * unchanged from Pi (kept for backward compatibility with existing projects'
+ * seeded skills — see CLAUDE.md on not restructuring on-disk paths casually);
+ * dsh's `dsh-skill-filesystem` scans this exact tree the same way Pi's
+ * `DefaultResourceLoader` did, given a `customDirs` entry pointing at it (see
+ * `session-registry.ts`'s `buildConfig`). The catalogue is the same
+ * ResearchCraft repo as before, and the SKILL.md format (Agent Skills
+ * standard: `---`-fenced YAML frontmatter with `name`/`description`) is
+ * unchanged — it's a content convention, not a Pi-specific one.
  *
  * Fast path: copy an existing sibling project's skills (local I/O). Slow path:
  * shallow-clone the repo once.
@@ -13,10 +18,50 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
 import { PROJECTS_ROOT } from "../config.ts";
 import type { ProjectPaths } from "../projects.ts";
 import type { ToggleResult } from "./capability-state.ts";
+
+export interface Skill {
+  name: string;
+  description: string;
+  filePath: string;
+}
+
+/** The `name:`/`description:` fields of a leading `---`-fenced YAML frontmatter block. */
+function parseFrontmatter(text: string): { name?: string; description?: string } {
+  const fence = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text);
+  if (!fence) return {};
+  const field = (key: string) => {
+    const m = new RegExp(`^${key}:\\s*(.+)$`, "m").exec(fence[1]);
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : undefined;
+  };
+  return { name: field("name"), description: field("description") };
+}
+
+/** Parse every `<dir>/<subdir>/SKILL.md` (Agent Skills standard layout) into a `Skill`. */
+function loadSkillsFromDir(dir: string): Skill[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const skills: Skill[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const filePath = path.join(dir, entry.name, "SKILL.md");
+    let text: string;
+    try {
+      text = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const { name, description } = parseFrontmatter(text);
+    skills.push({ name: name || entry.name, description: description ?? "", filePath });
+  }
+  return skills;
+}
 
 const SKILLS_REPO = process.env.KADY_SKILLS_REPO ?? "K-Dense-AI/scientific-agent-skills";
 const SKILLS_SUBPATH = "skills";
@@ -102,8 +147,7 @@ export function seedProjectSkills(paths: ProjectPaths, allowRemote = true): numb
 
 /** List installed skills for the project (parsed SKILL.md frontmatter). */
 export function listProjectSkills(paths: ProjectPaths): Skill[] {
-  if (!fs.existsSync(paths.skillsDir)) return [];
-  return loadSkillsFromDir({ dir: paths.skillsDir, source: "project" }).skills;
+  return loadSkillsFromDir(paths.skillsDir);
 }
 
 /** Skill directory names: no separators, no dot-dot. */
@@ -115,9 +159,7 @@ export function skillsDisabledDir(paths: ProjectPaths): string {
 
 /** Installed-but-disabled skills (parsed SKILL.md frontmatter). */
 export function listDisabledSkills(paths: ProjectPaths): Skill[] {
-  const dir = skillsDisabledDir(paths);
-  if (!fs.existsSync(dir)) return [];
-  return loadSkillsFromDir({ dir, source: "project" }).skills;
+  return loadSkillsFromDir(skillsDisabledDir(paths));
 }
 
 /** Raw SKILL.md text from whichever location holds the skill; null if absent. */

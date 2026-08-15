@@ -20,7 +20,6 @@
  * must not block on user input.
  */
 import { Type, type Static } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 /** Mirrors pi-interview's defaults. */
 const DEFAULT_TIMEOUT_S = 600;
@@ -234,110 +233,21 @@ export function validateAnswer(answer: InterviewAnswer): string | null {
   return null;
 }
 
-/**
- * Build the `interview` ToolDefinition for one project session. `getSessionId`
- * is a late-bound getter because the tool is constructed before the session
- * exists (same holder pattern as the subagent ledger extension).
- */
-export function makeInterviewTool(
-  projectId: string,
-  getSessionId: () => string,
-): ToolDefinition<typeof InterviewParams> {
-  return {
-    name: "interview",
-    label: "Interview",
-    description: [
-      "Present the user with an interactive form of questions in the chat and wait for their answers.",
-      "Use this liberally and early to ask clarifying questions: before starting any non-trivial or ambiguous task, when multiple reasonable approaches exist, before expensive/long-running or destructive work, and whenever you would otherwise have to assume. Asking is always better than guessing.",
-      "Prefer ONE interview with several focused questions over many separate calls. For every single/multi question, set `recommended` to your best suggestion (with `conviction`) so the user can simply confirm.",
-      'Question types: "single" (pick one), "multi" (pick many), "text" (free text), "image" (user uploads images, returned to you), "info" (non-interactive context panel).',
-      "Use `content` to show code/diff/Markdown and `media` to show images, tables, Mermaid diagrams, or charts alongside a question.",
-      "The result is a JSON array of {id, value} responses; uploaded images follow as image blocks. If the user dismisses the form, proceed with your recommendations.",
-    ].join("\n"),
-    promptSnippet:
-      "interview: ask the user clarifying questions through an interactive form and get structured answers",
-    promptGuidelines: [
-      "Ask clarifying questions as much as possible: whenever a request is ambiguous, underspecified, or has competing approaches, call the `interview` tool BEFORE doing the work — do not silently assume.",
-      "For any non-trivial task, open with a short interview that confirms scope, inputs, and the user's preferred approach (include your recommendations so confirming is one click).",
-      "Mid-task, when you hit a fork in the road (parameter choices, trade-offs, which dataset/file to use), pause and interview the user instead of picking arbitrarily.",
-    ],
-    parameters: InterviewParams,
-    // Blocks on user input — never run it concurrently with other tools.
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => {
-      const invalid = validateQuestions(params.questions);
-      if (invalid) throw new Error(invalid);
-      const sessionId = getSessionId();
-      const timeoutS = Math.min(
-        Math.max(params.timeout ?? DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S),
-        MAX_TIMEOUT_S,
-      );
-
-      const answer = await new Promise<InterviewAnswer>((resolve, reject) => {
-        const cleanup = () => {
-          pending.delete(toolCallId);
-          clearTimeout(timer);
-          signal?.removeEventListener("abort", onAbort);
-        };
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(
-            new Error(
-              `Interview timed out after ${timeoutS}s. The user did NOT answer any of these questions. ` +
-                "Do not claim or imply that the user chose, provided, confirmed, or approved any option — they did not respond at all. " +
-                "Tell the user plainly that you received no answer, then proceed using your own recommended defaults, " +
-                "explicitly labelling them as assumptions the user can correct.",
-            ),
-          );
-        }, timeoutS * 1000);
-        const onAbort = () => {
-          cleanup();
-          reject(new Error("Interview aborted"));
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-        pending.set(toolCallId, {
-          projectId,
-          sessionId,
-          payload: params,
-          settle: (a) => {
-            cleanup();
-            resolve(a);
-          },
-        });
-      });
-
-      if (answer.cancelled) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                "The user dismissed the interview without answering any question. " +
-                "Do not claim or imply that the user chose, provided, confirmed, or approved any option. " +
-                "Proceed with your recommended options, explicitly state the assumptions you made, " +
-                "and do not re-open the same interview.",
-            },
-          ],
-          details: { cancelled: true },
-        };
-      }
-
-      // Text summary first (what the model reasons over), then any uploaded
-      // images as native image blocks so the model can actually see them.
-      const summary = answer.responses.map((r) => ({
-        id: r.id,
-        value: r.value,
-        ...(r.attachments?.length ? { images: r.attachments.length } : {}),
-      }));
-      const content: Array<
-        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-      > = [{ type: "text", text: JSON.stringify({ responses: summary }, null, 2) }];
-      for (const r of answer.responses) {
-        for (const a of r.attachments ?? []) {
-          content.push({ type: "image", data: a.data, mimeType: a.mimeType });
-        }
-      }
-      return { content, details: { responses: summary } };
-    },
-  };
-}
+// TODO(#20): the model-facing `interview` tool itself (registering it so the
+// dsh agent can actually call it) is not yet ported. It needs an HTTP bridge
+// — the tool runs inside the dsh runtime SUBPROCESS, but `pending` above must
+// stay in THIS (main Fastify) process since it's what `/sessions/:id/interview/
+// :toolCallId` resolves against. Planned shape: a raw Cordis plugin (same
+// local-file-row pattern as `dsh-plugins/persona-subagents.mjs`) whose
+// `execute()` POSTs the questions payload to a new internal endpoint on this
+// server (e.g. `POST /internal/interview`), which registers into `pending`
+// exactly as `validateQuestions`/`pending.set` above do today and holds the
+// HTTP response open until `resolveInterview()` settles it (or it times out)
+// — i.e. the promise-based blocking wait below moves from an in-process
+// await to an HTTP long-poll, same `pending` map, same timeout/abort/cancel
+// semantics. `InterviewParams` (TypeBox) still describes the tool's model-
+// facing schema; it needs translating into dsh's `defineTool()` parameter
+// shape (see `dsh-plugins/persona-subagents.mjs`'s header comment for that
+// pattern) rather than passed through directly — the two schema shapes are
+// not wire-compatible (TypeBox = standard JSON Schema; dsh's ParameterSchemaSpec
+// keeps `required` as a per-property flag, not a schema-level array).

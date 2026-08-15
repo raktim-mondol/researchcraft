@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildConfiguredModel,
+  buildOneShotModel,
   getLlmConfig,
   llmConfigured,
-  resolveModel,
+  resolveModelId,
 } from "../src/agent/models.ts";
 
 const ENV_KEYS = [
@@ -60,27 +60,26 @@ describe("user-configured LLM endpoint", () => {
   it("builds a model against the configured base URL", () => {
     process.env.LLM_BASE_URL = "http://localhost:11434/v1";
     process.env.LLM_MODEL = "llama3.2";
-    const m = buildConfiguredModel();
+    const m = buildOneShotModel();
     expect(m.id).toBe("llama3.2");
     expect(m.baseUrl).toBe("http://localhost:11434/v1");
     expect(m.api).toBe("openai-completions");
-    expect(m.provider).toBe("openrouter");
+    expect(m.provider).toBe("researchcraft");
   });
 
-  it("resolveModel uses the configured endpoint and strips legacy prefixes", () => {
+  it("resolveModelId uses the configured endpoint and strips legacy prefixes", () => {
     process.env.LLM_BASE_URL = "https://api.openai.com/v1";
     process.env.LLM_MODEL = "gpt-4o";
-    // registry is unused for custom endpoints
-    const registry = {} as never;
-    const m = resolveModel("openrouter/gpt-4o-mini", registry);
-    expect(m.id).toBe("gpt-4o-mini");
+    const id = resolveModelId("openrouter/gpt-4o-mini");
+    expect(id).toBe("gpt-4o-mini");
+    const m = buildOneShotModel("openrouter/gpt-4o-mini");
     expect(m.baseUrl).toBe("https://api.openai.com/v1");
   });
 
   it("rejects fusion model refs", () => {
     process.env.LLM_BASE_URL = "https://api.openai.com/v1";
     process.env.LLM_MODEL = "gpt-4o";
-    expect(() => resolveModel("fusion/foo", {} as never)).toThrow(/Fusion/);
+    expect(() => resolveModelId("fusion/foo")).toThrow(/Fusion/);
   });
 
   it("llmConfigured is false without base URL or model", () => {

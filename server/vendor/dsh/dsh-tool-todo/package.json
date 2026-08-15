@@ -1,0 +1,67 @@
+{
+  "name": "@deepseek-ai/dsh-tool-todo",
+  "description": "Model-facing todo_write tool over the DeepSeek Harness event-sourced session log",
+  "version": "0.1.0-rc.5",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/todo/tool-todo"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/types/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "file:../schemastery",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-projection": "file:../dsh-session-projection",
+    "@deepseek-ai/dsh-tools": "file:../dsh-tools",
+    "@deepseek-ai/cordis": "file:../cordis"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis-plugin-include": "file:../cordis-plugin-include",
+    "@deepseek-ai/cordis-plugin-loader": "file:../cordis-plugin-loader",
+    "@deepseek-ai/dsh-agent": "file:../dsh-agent",
+    "@deepseek-ai/dsh-agent-loop": "file:../dsh-agent-loop",
+    "@deepseek-ai/dsh-agent-loop-testkit": "file:../dsh-agent-loop-testkit",
+    "@deepseek-ai/dsh-host-apiproxy": "file:../dsh-host-apiproxy",
+    "@deepseek-ai/dsh-invariants": "file:../dsh-invariants",
+    "@deepseek-ai/dsh-llm": "file:../dsh-llm",
+    "@deepseek-ai/dsh-session": "file:../dsh-session",
+    "@deepseek-ai/dsh-session-projection": "file:../dsh-session-projection",
+    "@deepseek-ai/dsh-system-prompt": "file:../dsh-system-prompt",
+    "@deepseek-ai/dsh-tools": "file:../dsh-tools",
+    "@deepseek-ai/dsh-user-questions": "file:../dsh-user-questions",
+    "@deepseek-ai/cordis": "file:../cordis"
+  }
+}

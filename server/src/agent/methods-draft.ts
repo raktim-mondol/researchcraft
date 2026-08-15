@@ -8,8 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { complete, type AssistantMessage, type Context } from "@earendil-works/pi-ai";
-import { getModelRegistry } from "./session-registry.ts";
-import { llmApiKey, resolveModel } from "./models.ts";
+import { buildOneShotModel, llmApiKey } from "./models.ts";
 import { emptySnapshot, isBudgetExceeded, recordRun } from "../cost/ledger.ts";
 import { getProject, resolvePaths, touchProject } from "../projects.ts";
 import { readNotebookEntries, type NotebookEntry } from "./notebook-store.ts";
@@ -159,7 +158,7 @@ export async function runMethodsDraft(
   }
   const paths = resolvePaths(projectId);
   const projectName = getProject(projectId)?.name;
-  const model = resolveModel(opts.model, getModelRegistry());
+  const model = buildOneShotModel(opts.model);
   let msg: AssistantMessage;
   try {
     msg = await completeFn(model, buildMethodsDraftContext(entries, { sessionId, projectName }), {

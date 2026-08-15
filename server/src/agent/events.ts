@@ -1,9 +1,22 @@
 /**
- * Map Pi's AgentSessionEvent union onto a stable, compact SSE schema the
- * frontend consumes. We deliberately flatten the streaming deltas and drop
- * Pi-internal lifecycle noise so the client contract stays small.
+ * Map dsh's `SessionEvent` stream onto the same compact SSE schema the
+ * frontend has always consumed (`web/src/lib/use-agent.ts`'s `AgentFrame`) —
+ * deliberately unchanged from the Pi era so the frontend needs no rewrite.
+ * `HarnessRuntime.run()`'s `onNotification` callback (see
+ * `dsh/runtime/HarnessRuntime.ts`) delivers `HarnessNotification`s whose
+ * `params.event` is one of these for the `session.event` method; only that
+ * method carries turn/tool/message data, so callers filter to it before
+ * calling `toClientFrame`.
+ *
+ * dsh's event log is flatter-grained than Pi's (a `tool/call` and its
+ * `tool/result` are separate top-level events correlated only by `callId`,
+ * where Pi's `tool_execution_start`/`_end` both carried the tool name
+ * directly) — `createFrameMapper` closes over that one piece of
+ * cross-event state a translation needs; everything else stays a pure
+ * function of one event.
  */
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { ContentBlock, StreamChunk } from "@deepseek-ai/dsh-llm";
+import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { skillLabelForRead } from "./skill-label.ts";
 
 export interface ClientFrame {
@@ -26,7 +39,7 @@ export function skillFieldFor(
 /**
  * Rewrite absolute sandbox paths to sandbox-relative ones for display.
  *
- * Tool args and bash commands from Pi carry the real host path of the project
+ * Tool args and bash commands carry the real host path of the project
  * sandbox (e.g. `/Users/.../projects/<id>/sandbox/de_analysis.py`). Surfacing
  * that in the UI and in shared exports is noisy and leaks the user's
  * filesystem layout. We collapse the sandbox root to a relative path:
@@ -55,8 +68,6 @@ function rootMatcher(sandboxRoot: string): RootMatcher {
   const seps = win ? ["\\", "/"] : ["/"];
   const norm = (s: string) => (win ? s.toLowerCase() : s);
   const toWire = (s: string) => (win ? s.replaceAll("\\", "/") : s);
-  // root+sep followed by the rest of the path token: the tail is kept but its
-  // separators are normalized to the wire format.
   const embedded = roots.flatMap((root) =>
     seps.map((sep) => new RegExp(escapeRe(root + sep) + "([^\\s\"'`]*)", win ? "gi" : "g")),
   );
@@ -92,14 +103,12 @@ export function stripSandboxRoot(value: string, sandboxRoot: string): string {
 
 export function relativizeSandboxPaths<T>(value: T, sandboxRoot: string): T {
   if (!sandboxRoot) return value;
-  // One matcher for the whole event/transcript — the root is constant.
   return relativizeWith(value, rootMatcher(sandboxRoot));
 }
 
 function relativizeWith<T>(value: T, matcher: RootMatcher): T {
   if (typeof value === "string") {
     const stripped = matcher.strip(value) ?? value;
-    // Embedded references (inside bash commands, multi-path args, etc.).
     return matcher.stripEmbedded(stripped) as unknown as T;
   }
   if (Array.isArray(value)) {
@@ -115,8 +124,7 @@ function relativizeWith<T>(value: T, matcher: RootMatcher): T {
   return value;
 }
 
-/** Pull human-readable text out of a Pi tool result before capping it.
- *  Results are usually `[{type:"text", text:"…"}]`; fall back to JSON. */
+/** Pull human-readable text out of a tool result's content blocks before capping it. */
 function resultText(s: unknown): string {
   if (typeof s === "string") return s;
   if (Array.isArray(s)) {
@@ -136,22 +144,13 @@ function resultText(s: unknown): string {
   return JSON.stringify(s ?? "");
 }
 
-/** Flatten a user message's content (string or content-part array) to plain
- *  text. Image parts are dropped — the UI renders steered messages as text. */
-function userMessageText(message: unknown): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) =>
-        p && typeof p === "object" && (p as { type?: string }).type === "text"
-          ? String((p as { text?: unknown }).text ?? "")
-          : "",
-      )
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
+/** Flatten a user message's content blocks to plain text. Image blocks are
+ *  dropped — the UI renders steered messages as text. */
+function userMessageText(content: ContentBlock[]): string {
+  return content
+    .filter((c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
 }
 
 function cap(s: unknown, max = 4000): string {
@@ -159,67 +158,85 @@ function cap(s: unknown, max = 4000): string {
   return str.length > max ? str.slice(0, max) + "…" : str;
 }
 
-/** Returns a client frame for an event, or null to skip it.
- *  `sandboxRoot` (when provided) relativizes absolute sandbox paths in tool
- *  args so the UI shows `de_analysis.py` rather than the full host path. */
-export function toClientFrame(
-  ev: AgentSessionEvent,
-  sandboxRoot = "",
-): ClientFrame | null {
-  switch (ev.type) {
-    case "agent_start":
-      return { type: "agent_start" };
-    case "agent_end":
-      return { type: "agent_end" };
-    case "turn_start":
-      return { type: "turn_start" };
-    case "turn_end": {
-      const usage = (ev.message as { usage?: unknown }).usage;
-      return { type: "turn_end", usage };
-    }
-    case "message_start": {
-      const role = (ev.message as { role?: string }).role;
-      // User content marks the exact point a steered message was delivered
-      // into the run, so the client can split the transcript there.
-      if (role === "user") {
-        return { type: "message_start", role, content: userMessageText(ev.message) };
-      }
-      return { type: "message_start", role };
-    }
-    case "message_end":
-      return { type: "message_end", role: (ev.message as { role?: string }).role };
-    case "message_update": {
-      const a = ev.assistantMessageEvent;
-      if (a.type === "text_delta") return { type: "text_delta", delta: a.delta };
-      if (a.type === "thinking_delta") return { type: "thinking_delta", delta: a.delta };
-      if (a.type === "error") {
-        return { type: "error", message: `Model error (${a.reason})`, reason: a.reason };
-      }
-      return null;
-    }
-    case "tool_execution_start":
-      return {
-        type: "tool_start",
-        toolCallId: ev.toolCallId,
-        toolName: ev.toolName,
-        args: relativizeSandboxPaths(ev.args, sandboxRoot),
-        ...skillFieldFor(ev.toolName, ev.args, sandboxRoot),
-      };
-    case "tool_execution_update":
-      return { type: "tool_update", toolCallId: ev.toolCallId, toolName: ev.toolName };
-    case "tool_execution_end":
-      return {
-        type: "tool_end",
-        toolCallId: ev.toolCallId,
-        toolName: ev.toolName,
-        isError: ev.isError,
-        result: cap(ev.result),
-      };
-    case "queue_update":
-      return { type: "queue_update", steering: ev.steering, followUp: ev.followUp };
-    case "auto_retry_start":
-      return { type: "retry", attempt: ev.attempt, max: ev.maxAttempts };
-    default:
-      return null;
+/** Best-effort JSON.parse of a tool call's raw `arguments` string (dsh keeps
+ *  it as the model's exact unparsed JSON). Falls back to the raw string on
+ *  malformed JSON rather than throwing mid-stream. */
+function parseToolArgs(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
   }
+}
+
+/**
+ * Per-run event-to-frame translator. `tool/result` events don't carry the
+ * tool name (only `callId`) — this closes over the `tool/call` events seen
+ * so far in this run to recover it. Construct one per run (per
+ * `HarnessRuntime.run()` call) and feed it every `session.event` in order;
+ * do not share across concurrent runs.
+ */
+export function createFrameMapper(sandboxRoot = ""): {
+  toClientFrame(event: SessionEvent): ClientFrame | null;
+} {
+  const toolNameByCallId = new Map<string, string>();
+
+  function toClientFrame(event: SessionEvent): ClientFrame | null {
+    switch (event.type) {
+      case "turn/start":
+        return { type: "turn_start" };
+      case "turn/end": {
+        const { reason } = event.data;
+        if (reason.kind === "error") {
+          return { type: "error", message: reason.error.message, reason: reason.kind };
+        }
+        return { type: "turn_end", reason: reason.kind };
+      }
+      case "user/message": {
+        const data = event.data;
+        if (data.role !== "user") return null;
+        return { type: "message_start", role: "user", content: userMessageText(data.content) };
+      }
+      case "assistant/chunk": {
+        const chunk: StreamChunk = event.data.chunk;
+        if (chunk.type === "text-delta") return { type: "text_delta", delta: chunk.text };
+        if (chunk.type === "reasoning-delta") return { type: "thinking_delta", delta: chunk.text };
+        if (chunk.type === "finish" && chunk.reason.kind === "error") {
+          return { type: "error", message: chunk.reason.failure.message, reason: "error" };
+        }
+        if (chunk.type === "finish" && chunk.reason.kind === "aborted") {
+          return { type: "error", message: chunk.reason.failure.message, reason: "aborted" };
+        }
+        return null;
+      }
+      case "tool/call": {
+        const { callId, name, arguments: rawArgs } = event.data;
+        toolNameByCallId.set(String(callId), name);
+        const args = relativizeSandboxPaths(parseToolArgs(rawArgs), sandboxRoot);
+        return {
+          type: "tool_start",
+          toolCallId: String(callId),
+          toolName: name,
+          args,
+          ...skillFieldFor(name, args, sandboxRoot),
+        };
+      }
+      case "tool/result": {
+        const block = event.data.message.content[0];
+        const toolCallId = String(block.toolCallId);
+        const toolName = toolNameByCallId.get(toolCallId) ?? "tool";
+        return {
+          type: "tool_end",
+          toolCallId,
+          toolName,
+          isError: Boolean(block.isError),
+          result: cap(block.content),
+        };
+      }
+      default:
+        return null;
+    }
+  }
+
+  return { toClientFrame };
 }
