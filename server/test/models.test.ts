@@ -3,7 +3,9 @@ import {
   buildConfiguredModel,
   DEFAULT_LLM_CONTEXT_WINDOW,
   getLlmConfig,
+  getLlmPricing,
   llmConfigured,
+  llmMultimodal,
   parseContextWindow,
   resolveModel,
 } from "../src/agent/models.ts";
@@ -13,6 +15,10 @@ const ENV_KEYS = [
   "LLM_API_KEY",
   "LLM_MODEL",
   "LLM_CONTEXT_WINDOW",
+  "LLM_MULTIMODAL",
+  "LLM_PRICE_INPUT",
+  "LLM_PRICE_OUTPUT",
+  "LLM_PRICE_CACHE_READ",
   "OPENROUTER_BASE_URL",
   "OPENROUTER_API_KEY",
   "OR_API_KEY",
@@ -111,5 +117,52 @@ describe("user-configured LLM endpoint", () => {
     delete process.env.LLM_MODEL;
     delete process.env.DEFAULT_MODEL_ID;
     expect(llmConfigured()).toBe(false);
+  });
+
+  it("llmMultimodal defaults to false and accepts true/1/yes/on", () => {
+    delete process.env.LLM_MULTIMODAL;
+    expect(llmMultimodal()).toBe(false);
+    for (const v of ["true", "TRUE", "1", "yes", "on"]) {
+      process.env.LLM_MULTIMODAL = v;
+      expect(llmMultimodal()).toBe(true);
+    }
+    for (const v of ["false", "0", "no", "", "maybe"]) {
+      process.env.LLM_MULTIMODAL = v;
+      expect(llmMultimodal()).toBe(false);
+    }
+  });
+
+  it("model input is text-only by default and includes image when multimodal", () => {
+    process.env.LLM_BASE_URL = "https://api.example.com/v1";
+    process.env.LLM_MODEL = "text-model";
+    delete process.env.LLM_MULTIMODAL;
+    expect(buildConfiguredModel().input).toEqual(["text"]);
+    process.env.LLM_MULTIMODAL = "true";
+    expect(buildConfiguredModel().input).toEqual(["text", "image"]);
+  });
+
+  it("pricing parses USD-per-1M values and feeds the model cost", () => {
+    delete process.env.LLM_PRICE_INPUT;
+    delete process.env.LLM_PRICE_OUTPUT;
+    delete process.env.LLM_PRICE_CACHE_READ;
+    expect(getLlmPricing()).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+    process.env.LLM_PRICE_INPUT = "0.28";
+    process.env.LLM_PRICE_OUTPUT = "0.42";
+    process.env.LLM_PRICE_CACHE_READ = "0.028";
+    expect(getLlmPricing()).toEqual({ input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 });
+
+    process.env.LLM_BASE_URL = "https://api.example.com/v1";
+    process.env.LLM_MODEL = "priced-model";
+    const m = buildConfiguredModel();
+    expect(m.cost).toEqual({ input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 });
+
+    // Invalid values fall back to $0 rather than poisoning the ledger.
+    process.env.LLM_PRICE_INPUT = "expensive?";
+    process.env.LLM_PRICE_OUTPUT = "-1";
+    expect(getLlmPricing().input).toBe(0);
+    expect(getLlmPricing().output).toBe(0);
+    process.env.LLM_PRICE_INPUT = "1,000";
+    expect(getLlmPricing().input).toBe(1000);
   });
 });

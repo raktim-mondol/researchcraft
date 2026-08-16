@@ -61,6 +61,7 @@ vertex_ai_credentials.json
 coverage/
 .nyc_output/
 benchmarking/
+e2e-output/
 
 # Project
 /projects

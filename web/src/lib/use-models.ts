@@ -29,15 +29,20 @@ function parseContextLength(raw: string | undefined): number {
   return Math.floor(n);
 }
 
-function toModel(id: string, baseUrl?: string, contextLength?: number): Model {
+function toModel(
+  id: string,
+  baseUrl?: string,
+  contextLength?: number,
+  extra?: { multimodal?: boolean; priceInput?: number; priceOutput?: number },
+): Model {
   return {
     id,
     label: id,
     provider: "Custom",
     tier: "flagship",
     context_length: contextLength ?? DEFAULT_LLM_CONTEXT_WINDOW,
-    pricing: { prompt: 0, completion: 0 },
-    modality: "text->text",
+    pricing: { prompt: extra?.priceInput ?? 0, completion: extra?.priceOutput ?? 0 },
+    modality: extra?.multimodal ? "text+image->text" : "text->text",
     description: baseUrl
       ? `Configured endpoint • ${baseUrl}`
       : "Configured in Settings → API keys",
@@ -45,9 +50,17 @@ function toModel(id: string, baseUrl?: string, contextLength?: number): Model {
   };
 }
 
+/** Parse a USD-per-1M-token price from the credentials payload. */
+function parsePrice(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number(String(raw).trim().replace(/,/g, ""));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 /**
  * Single source of truth for the active model: whatever the user saved under
- * Settings (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_CONTEXT_WINDOW).
+ * Settings (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_CONTEXT_WINDOW /
+ * LLM_MULTIMODAL / LLM_PRICE_*).
  * No OpenRouter catalogue, no Fusion presets, no Ollama tag discovery.
  */
 export function useModels(): UseModelsReturn {
@@ -63,8 +76,15 @@ export function useModels(): UseModelsReturn {
         const modelName = (data.llmModel?.value || data.llm?.value || "").trim();
         const url = (data.llmBaseUrl?.value || "").trim();
         const ctx = parseContextLength(data.llmContextWindow?.value);
+        const multimodal = (data.llmMultimodal?.value ?? "").trim().toLowerCase() === "true";
+        const priceInput = parsePrice(data.llmPriceInput?.value);
+        const priceOutput = parsePrice(data.llmPriceOutput?.value);
         setBaseUrl(url);
-        setModels(modelName ? [toModel(modelName, url, ctx)] : []);
+        setModels(
+          modelName
+            ? [toModel(modelName, url, ctx, { multimodal, priceInput, priceOutput })]
+            : [],
+        );
       })
       .catch(() => {
         setModels([]);

@@ -56,6 +56,9 @@ LLM_API_KEY=sk-or-...                      # Bearer key for that endpoint
 LLM_MODEL=anthropic/claude-sonnet-4        # model id the endpoint expects
 # optional
 LLM_CONTEXT_WINDOW=200000                  # tokens; defaults to 1M if unset
+LLM_MULTIMODAL=true                        # set for vision models (image attachments)
+LLM_PRICE_INPUT=0.28                       # USD per 1M tokens → accurate cost meter + spend cap
+LLM_PRICE_OUTPUT=0.42
 ```
 
 ## Documentation

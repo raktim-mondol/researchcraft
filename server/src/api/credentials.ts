@@ -97,6 +97,40 @@ const MANAGED_KEYS: ManagedKey[] = [
     allowShort: true,
     isPlainText: true,
   },
+  {
+    // Vision toggle: "true" = the endpoint accepts image blocks (Model.input
+    // includes "image"). Empty/unset = text-only — /run then rejects image
+    // attachments with a clear error instead of silently dropping them.
+    id: "llmMultimodal",
+    bodyField: "llmMultimodal",
+    envVar: "LLM_MULTIMODAL",
+    allowShort: true,
+    isPlainText: true,
+  },
+  // Optional per-model pricing (USD per 1M tokens). When set, Pi prices every
+  // run from token usage so the cost meters and the project spend cap are
+  // accurate even if the provider reports no usage cost. Empty clears → $0.
+  {
+    id: "llmPriceInput",
+    bodyField: "llmPriceInput",
+    envVar: "LLM_PRICE_INPUT",
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    id: "llmPriceOutput",
+    bodyField: "llmPriceOutput",
+    envVar: "LLM_PRICE_OUTPUT",
+    allowShort: true,
+    isPlainText: true,
+  },
+  {
+    id: "llmPriceCacheRead",
+    bodyField: "llmPriceCacheRead",
+    envVar: "LLM_PRICE_CACHE_READ",
+    allowShort: true,
+    isPlainText: true,
+  },
   // Text-to-image (OpenAI Images + Gemini Nano Banana). IMAGE_MODEL enables the tool.
   {
     id: "imageModel",
@@ -240,6 +274,28 @@ function applyKey(spec: ManagedKey, raw: string | null): string | null {
     process.env[spec.envVar] = p;
     persistEnv(spec.envVar, p);
     spec.onChange?.(p);
+    return null;
+  }
+  if (spec.id === "llmMultimodal") {
+    const v = key.toLowerCase();
+    if (v !== "true" && v !== "false" && v !== "1" && v !== "0") {
+      return 'Supports images must be "true" or "false"';
+    }
+    const stored = v === "true" || v === "1" ? "true" : "false";
+    process.env[spec.envVar] = stored;
+    persistEnv(spec.envVar, stored);
+    spec.onChange?.(stored);
+    return null;
+  }
+  if (spec.id.startsWith("llmPrice")) {
+    const n = Number(key.replace(/,/g, ""));
+    if (!Number.isFinite(n) || n < 0) {
+      return "Price must be a non-negative number (USD per 1M tokens)";
+    }
+    const stored = String(n);
+    process.env[spec.envVar] = stored;
+    persistEnv(spec.envVar, stored);
+    spec.onChange?.(stored);
     return null;
   }
   if (spec.id === "llmContextWindow") {

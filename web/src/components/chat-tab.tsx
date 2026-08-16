@@ -172,10 +172,12 @@ function PromptDropZone({
   children,
   onFileDrop,
   onFilesUpload,
+  imagesSupported,
 }: {
   children: React.ReactNode;
   onFileDrop?: (path: string) => void;
   onFilesUpload?: (files: FileList | File[], paths?: string[]) => void;
+  imagesSupported?: boolean;
 }) {
   const controller = usePromptInputController();
   const [isDragOver, setIsDragOver] = useState(false);
@@ -233,17 +235,23 @@ function PromptDropZone({
         const dropped = [...e.dataTransfer.files];
         const inline = dropped.filter((f) => isInlineImage(f.type));
         const rest = dropped.filter((f) => !isInlineImage(f.type));
-        const capacity = Math.max(
-          0,
-          MAX_PROMPT_IMAGES - controller.attachments.files.length,
-        );
-        if (inline.length > 0 && capacity > 0) {
-          controller.attachments.add(inline.slice(0, capacity));
+        if (inline.length > 0) {
+          if (!imagesSupported) {
+            toast.error(
+              'This model can\'t see images. Enable "Supports images (vision)" in Settings → API keys (for vision-capable models) and try again.',
+            );
+          } else {
+            const capacity = Math.max(
+              0,
+              MAX_PROMPT_IMAGES - controller.attachments.files.length,
+            );
+            if (capacity > 0) controller.attachments.add(inline.slice(0, capacity));
+          }
         }
         if (rest.length > 0) onFilesUpload(rest);
       }
     },
-    [controller, onFileDrop, onFilesUpload],
+    [controller, onFileDrop, onFilesUpload, imagesSupported],
   );
 
   const isOsDrag = isDragOver;
@@ -691,9 +699,14 @@ function ChatInput({
 
   const isMentionOpen = mentionQuery !== null && filteredFiles.length > 0;
   const submitStatus = isStreaming ? "streaming" : agentStatus === "error" ? "error" : "ready";
+  const imagesSupported = (selectedModel.modality ?? "").includes("image");
 
   return (
-    <PromptDropZone onFileDrop={onAddFile} onFilesUpload={handleFilesUpload}>
+    <PromptDropZone
+      onFileDrop={onAddFile}
+      onFilesUpload={handleFilesUpload}
+      imagesSupported={imagesSupported}
+    >
       <div className="relative">
         {isMentionOpen && (
           <div

@@ -7,6 +7,13 @@
  *   - LLM_MODEL     — model id the endpoint expects
  *   - LLM_CONTEXT_WINDOW — optional token context budget for the meter / compaction
  *     (defaults to 1_000_000 when unset or invalid)
+ *   - LLM_MULTIMODAL — "true" when the model accepts image blocks (vision);
+ *     unset/false = text-only, so /run rejects image attachments with a clear
+ *     error instead of letting the provider silently drop them
+ *   - LLM_PRICE_INPUT / LLM_PRICE_OUTPUT / LLM_PRICE_CACHE_READ — optional USD
+ *     per 1M tokens; when set, Pi prices every run from token usage so the cost
+ *     meters and the project spend cap are accurate even if the provider
+ *     reports no usage cost
  *
  * Internally Pi still uses the "openrouter" provider slot (its built-in
  * OpenAI-completions path) so subagent child `pi` processes can pick up the
@@ -75,6 +82,37 @@ export function llmConfigured(): boolean {
   return Boolean(baseUrl && model);
 }
 
+/** Whether the configured endpoint accepts image blocks (vision-capable). */
+export function llmMultimodal(): boolean {
+  const v = (process.env.LLM_MULTIMODAL ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
+/** USD per 1M tokens for the configured endpoint (optional; $0 when unset). */
+export interface LlmPricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+function parseUsdPerMTokens(raw: string | undefined | null): number {
+  if (raw == null) return 0;
+  const s = String(raw).trim().replace(/,/g, "");
+  if (!s) return 0;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+export function getLlmPricing(): LlmPricing {
+  return {
+    input: parseUsdPerMTokens(process.env.LLM_PRICE_INPUT),
+    output: parseUsdPerMTokens(process.env.LLM_PRICE_OUTPUT),
+    cacheRead: parseUsdPerMTokens(process.env.LLM_PRICE_CACHE_READ),
+    cacheWrite: 0,
+  };
+}
+
 /**
  * Build the Pi Model for the configured endpoint.
  * `ref` is ignored when the saved LLM_MODEL is set (the UI no longer offers
@@ -83,6 +121,7 @@ export function llmConfigured(): boolean {
  */
 export function buildConfiguredModel(ref?: string): Model<Api> {
   const cfg = getLlmConfig();
+  const pricing = getLlmPricing();
   const id = (ref && ref.trim()) || cfg.model || "unconfigured";
   const baseUrl = (cfg.baseUrl || "http://127.0.0.1:0").replace(/\/+$/, "");
   return {
@@ -92,10 +131,17 @@ export function buildConfiguredModel(ref?: string): Model<Api> {
     provider: LLM_PROVIDER,
     baseUrl,
     reasoning: true,
-    input: ["text", "image"],
-    // No catalogue pricing — cost tracking shows $0 unless the provider
-    // reports usage the user meters externally.
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    // Text-only unless LLM_MULTIMODAL is enabled — image parts are then
+    // rejected at the /run boundary rather than silently dropped upstream.
+    input: llmMultimodal() ? ["text", "image"] : ["text"],
+    // Cost tracking from token usage × configured per-1M-token prices. $0
+    // when unset, in which case only provider-reported usage cost is ledgered.
+    cost: {
+      input: pricing.input,
+      output: pricing.output,
+      cacheRead: pricing.cacheRead,
+      cacheWrite: pricing.cacheWrite,
+    },
     contextWindow: cfg.contextWindow,
     maxTokens: 8192,
   };

@@ -19,7 +19,7 @@ import {
 } from "../agent/interview.ts";
 import { setSessionComputeTarget } from "../agent/modal-tool.ts";
 import { setSessionRunpodComputeTarget } from "../agent/runpod-tool.ts";
-import { llmConfigured, resolveModel } from "../agent/models.ts";
+import { llmConfigured, llmMultimodal, resolveModel } from "../agent/models.ts";
 import { parseRunImages } from "../agent/prompt-images.ts";
 import { readNotebookEntries } from "../agent/notebook-store.ts";
 import { notebookToMarkdown } from "../agent/notebook-export.ts";
@@ -497,6 +497,16 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       if ("error" in parsedImages) {
         reply.code(400);
         return { detail: parsedImages.error };
+      }
+      // The configured endpoint may be text-only (e.g. DeepSeek Flash): image
+      // blocks would be silently dropped upstream and the model would claim it
+      // never saw them. Fail clearly and tell the user the fix instead.
+      if (parsedImages.images.length > 0 && !llmMultimodal()) {
+        reply.code(400);
+        return {
+          detail:
+            'The configured model does not support images. Enable "Supports images (vision)" under Settings → API keys (only for vision-capable models), or remove the image attachment.',
+        };
       }
       // No awaits between the guard above and this claim, so it is atomic.
       activeRuns.add(runKey);

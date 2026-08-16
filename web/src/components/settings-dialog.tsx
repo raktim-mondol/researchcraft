@@ -11,6 +11,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import {
@@ -228,6 +229,10 @@ function LlmEndpointForm({
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [contextWindow, setContextWindow] = useState("");
+  const [multimodal, setMultimodal] = useState(false);
+  const [priceInput, setPriceInput] = useState("");
+  const [priceOutput, setPriceOutput] = useState("");
+  const [priceCacheRead, setPriceCacheRead] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -240,6 +245,10 @@ function LlmEndpointForm({
     setBaseUrl(status.llmBaseUrl?.value ?? "");
     setModel(status.llmModel?.value ?? "");
     setContextWindow(status.llmContextWindow?.value ?? "");
+    setMultimodal((status.llmMultimodal?.value ?? "").trim().toLowerCase() === "true");
+    setPriceInput(status.llmPriceInput?.value ?? "");
+    setPriceOutput(status.llmPriceOutput?.value ?? "");
+    setPriceCacheRead(status.llmPriceCacheRead?.value ?? "");
     setHydrated(true);
   }, [status, hydrated]);
 
@@ -253,6 +262,10 @@ function LlmEndpointForm({
         llmModel: model.trim() || null,
         // Empty → clear env var so the server uses the 1M default.
         llmContextWindow: contextWindow.trim() || null,
+        llmMultimodal: multimodal ? "true" : null,
+        llmPriceInput: priceInput.trim() || null,
+        llmPriceOutput: priceOutput.trim() || null,
+        llmPriceCacheRead: priceCacheRead.trim() || null,
       };
       // Only send the key when the user typed a new one (empty = leave as-is).
       if (apiKey.trim()) body.llmApiKey = apiKey.trim();
@@ -267,8 +280,12 @@ function LlmEndpointForm({
       if (!res.ok) throw new Error(data?.detail || `Save failed (${res.status})`);
       if (data) onStatus(data as CredentialStatus);
       setApiKey("");
-      // Reflect normalized value from the server (e.g. stripped commas).
+      // Reflect normalized values from the server.
       setContextWindow(data?.llmContextWindow?.value ?? contextWindow.trim());
+      setMultimodal((data?.llmMultimodal?.value ?? "").trim().toLowerCase() === "true");
+      setPriceInput(data?.llmPriceInput?.value ?? priceInput.trim());
+      setPriceOutput(data?.llmPriceOutput?.value ?? priceOutput.trim());
+      setPriceCacheRead(data?.llmPriceCacheRead?.value ?? priceCacheRead.trim());
       setSaved(true);
       window.dispatchEvent(new Event("llm-config-changed"));
     } catch (exc) {
@@ -276,7 +293,7 @@ function LlmEndpointForm({
     } finally {
       setSaving(false);
     }
-  }, [baseUrl, apiKey, model, contextWindow, onStatus]);
+  }, [baseUrl, apiKey, model, contextWindow, multimodal, priceInput, priceOutput, priceCacheRead, onStatus]);
 
   const clearAll = useCallback(async () => {
     setSaving(true);
@@ -291,6 +308,10 @@ function LlmEndpointForm({
           llmApiKey: null,
           llmModel: null,
           llmContextWindow: null,
+          llmMultimodal: null,
+          llmPriceInput: null,
+          llmPriceOutput: null,
+          llmPriceCacheRead: null,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -302,6 +323,10 @@ function LlmEndpointForm({
       setApiKey("");
       setModel("");
       setContextWindow("");
+      setMultimodal(false);
+      setPriceInput("");
+      setPriceOutput("");
+      setPriceCacheRead("");
       setSaved(true);
       window.dispatchEvent(new Event("llm-config-changed"));
     } catch (exc) {
@@ -435,6 +460,65 @@ function LlmEndpointForm({
         </p>
       </div>
 
+      <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-background/40 px-3 py-2">
+        <div className="flex flex-col gap-0.5">
+          <label className="text-xs font-medium" htmlFor="llm-multimodal">
+            Supports images (vision)
+          </label>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Enable only when the model can actually see images. Image
+            attachments are rejected with a clear error otherwise.
+          </p>
+        </div>
+        <Switch
+          id="llm-multimodal"
+          checked={multimodal}
+          onCheckedChange={(v) => {
+            setMultimodal(v);
+            setSaved(false);
+          }}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium">
+          Pricing — USD per 1M tokens
+        </label>
+        <div className="grid grid-cols-3 gap-2">
+          {(
+            [
+              ["priceInput", "Input", priceInput, setPriceInput],
+              ["priceOutput", "Output", priceOutput, setPriceOutput],
+              ["priceCacheRead", "Cache read", priceCacheRead, setPriceCacheRead],
+            ] as const
+          ).map(([id, label, value, setter]) => (
+            <div key={id} className="flex flex-col gap-1">
+              <span className="text-[10px] text-muted-foreground">{label}</span>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={value}
+                autoComplete="off"
+                placeholder="0"
+                className="h-8 text-xs font-mono"
+                onChange={(e) => {
+                  setter(e.target.value);
+                  setSaved(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSave) void submit();
+                }}
+              />
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Optional — makes the cost meters and the project spend cap accurate
+          even when the provider reports no usage cost. Leave blank to track
+          only what the provider reports.
+        </p>
+      </div>
+
       <div className="flex items-center gap-2 pt-1">
         <Button
           size="sm"
@@ -447,7 +531,11 @@ function LlmEndpointForm({
         {(status?.llmBaseUrl?.set ||
           status?.llmModel?.set ||
           status?.llmApiKey?.set ||
-          status?.llmContextWindow?.set) && (
+          status?.llmContextWindow?.set ||
+          status?.llmMultimodal?.set ||
+          status?.llmPriceInput?.set ||
+          status?.llmPriceOutput?.set ||
+          status?.llmPriceCacheRead?.set) && (
           <Button
             variant="ghost"
             size="sm"
